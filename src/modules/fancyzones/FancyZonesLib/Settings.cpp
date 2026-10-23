@@ -50,6 +50,7 @@ namespace NonLocalizable
     const wchar_t MonitorRotationHotkeyID[] = L"fancyzones_monitorRotation_hotkey";
     const wchar_t ExcludedAppsID[] = L"fancyzones_excluded_apps";
     const wchar_t ZoneHighlightOpacityID[] = L"fancyzones_highlight_opacity";
+    const wchar_t DockCaptionButtonsID[] = L"fancyzones_dockCaptionButtons";
     const wchar_t DockGapID[] = L"fancyzones_dockGap";
     const wchar_t DockEdgeBandID[] = L"fancyzones_dockEdgeBand";
     const wchar_t DockWindowEdgePercentID[] = L"fancyzones_dockWindowEdgePercent";
@@ -194,6 +195,11 @@ void FancyZonesSettings::LoadSettings()
         SetBoolFlag(values, NonLocalizable::LayoutNameLabelEnabledID, SettingId::LayoutNameLabelEnabled, m_settings.layoutNameLabelEnabled);
 
         // Read when a window is docked or the layout is applied: no observer needs to hear about them
+        if (auto val = values.get_bool_value(NonLocalizable::DockCaptionButtonsID))
+        {
+            m_settings.dockCaptionButtons = *val;
+        }
+
         if (auto val = values.get_int_value(NonLocalizable::DockGapID))
         {
             m_settings.dockGap = std::clamp(*val, 0, 100);

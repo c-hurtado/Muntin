@@ -131,6 +131,7 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_excluded_apps` | Apps that are never docked: one name or path fragment per line (`\r` or `\n` between entries in the JSON string) | empty |
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
 | `fancyzones_restoreSize` | A window that is undocked gets back the size it had before | `false` |
+| `fancyzones_dockCaptionButtons` | Show < > buttons left of the minimize button of every docked window. They move the window to the neighbor on that side, like Shift+Win+Left and Shift+Win+Right. | `true` |
 
 ### Look
 

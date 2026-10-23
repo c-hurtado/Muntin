@@ -9,6 +9,7 @@
 #include <common/SettingsAPI/FileWatcher.h>
 #include <common/notifications/NotificationUtil.h>
 
+#include <FancyZonesLib/DockCaptionButtons.h>
 #include <FancyZonesLib/DraggingState.h>
 #include <FancyZonesLib/EditorParameters.h>
 #include <FancyZonesLib/FancyZonesData.h>
@@ -91,6 +92,9 @@ namespace
 
     constexpr UINT_PTR MonitorRotationCommitTimerId = 0x4D525443;
     constexpr UINT MonitorRotationCommitDelayMillis = 760;
+
+    constexpr UINT_PTR CaptionButtonsTimerId = 0x43425455;
+    constexpr UINT CaptionButtonsRefreshMillis = 100;
 
     constexpr UINT_PTR DockClaimTimerId = 0x444B434C;
     constexpr UINT DockClaimRetryMillis = 500;
@@ -335,6 +339,10 @@ public:
             }
             break;
 
+        case EVENT_SYSTEM_FOREGROUND:
+            PostMessageW(m_window, WM_PRIV_CAPTION_BUTTONS_REFRESH, 0, 0);
+            break;
+
         case EVENT_SYSTEM_MINIMIZESTART:
             PostMessageW(m_window, WM_PRIV_DOCK_VISIBILITY, wparam, TRUE);
             break;
@@ -403,6 +411,10 @@ private:
     void DockVisibility(HWND window, bool minimizing) noexcept;
     void DockSlot(int key, bool save) noexcept;
     void DockMoveByKey(DWORD vkCode) noexcept;
+    void DockMoveWindow(HWND window, Dock::Edge edge) noexcept;
+    bool CanDockMove(HWND window) const noexcept;
+    void UpdateCaptionButtons() noexcept;
+    void SyncCaptionButtonsTimer() noexcept;
     void DockFocusByKey(DWORD vkCode) noexcept;
     bool DockCommand(const std::wstring& verb, const std::wstring& name) noexcept;
     void DockLoad(std::wstring name) noexcept;
@@ -422,6 +434,7 @@ private:
     DWORD m_dockSlotKey{}; // Digit of the dock layout hotkey that is held down
     std::wstring m_dockLoadName; // Named dock layout to load on WM_PRIV_DOCK_LOAD, empty when none is pending
     std::map<std::wstring, ULONGLONG> m_dockLaunched; // Apps started by a named layout, and when
+    std::unique_ptr<DockCaptionButtons::Overlays> m_captionButtons;
     WorkAreaConfiguration m_workAreaConfiguration;
     DraggingState m_draggingState;
     bool m_monitorRotationPreviewActive = false;
@@ -477,6 +490,17 @@ FancyZones::Run() noexcept
         Logger::critical(L"Failed to create FancyZones window");
         return;
     }
+
+    m_captionButtons = std::make_unique<DockCaptionButtons::Overlays>(m_hinstance, [this](HWND window, Dock::Edge edge) {
+        // A window that can't be moved isn't brought to the front for nothing
+        if (CanDockMove(window))
+        {
+            FancyZonesWindowUtils::SwitchToWindow(window);
+            DockMoveWindow(window, edge);
+            UpdateCaptionButtons();
+        }
+    });
+    SyncCaptionButtonsTimer();
 
     if (!KeyboardInput::Initialize(m_window))
     {
@@ -534,6 +558,12 @@ FancyZones::Run() noexcept
 IFACEMETHODIMP_(void)
 FancyZones::Destroy() noexcept
 {
+    if (m_window)
+    {
+        KillTimer(m_window, CaptionButtonsTimerId);
+    }
+
+    m_captionButtons.reset();
     m_workAreaConfiguration.Clear();
     BufferedPaintUnInit();
     if (m_window)
@@ -1219,6 +1249,10 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 ShowMonitorRotationPreview();
             }
         }
+        else if (message == WM_PRIV_CAPTION_BUTTONS_REFRESH || (message == WM_TIMER && wparam == CaptionButtonsTimerId))
+        {
+            UpdateCaptionButtons();
+        }
         else if (message == WM_TIMER && wparam == DockClaimTimerId)
         {
             KillTimer(m_window, DockClaimTimerId);
@@ -1247,6 +1281,8 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_SETTINGS_CHANGED)
         {
             FancyZonesSettings::instance().LoadSettings();
+
+            SyncCaptionButtonsTimer();
 
             // The gap between docked windows may have changed
             for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
@@ -1307,6 +1343,12 @@ void FancyZones::OnDisplayChange(DisplayChangeType changeType) noexcept
         updateWindowsPositions = FancyZonesSettings::settings().displayOrWorkAreaChange_moveWindows;
         break;
     case DisplayChangeType::VirtualDesktop: // Switched virtual desktop
+        // The buttons of a window are a window of their own and stay on the desktop they were created on
+        if (m_captionButtons)
+        {
+            m_captionButtons->Clear();
+        }
+
         SyncVirtualDesktops();
         break;
     case DisplayChangeType::Initialization: // Initialization
@@ -1915,19 +1957,74 @@ void FancyZones::DockVisibility(HWND window, bool minimizing) noexcept
 
 void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
 {
-    const auto window = GetForegroundWindow();
-    if (!FancyZonesWindowProcessing::IsProcessableManually(window) || FancyZonesSettings::settings().spanZonesAcrossMonitors)
+    const auto edge = vkCode == VK_LEFT ? Dock::Edge::Left : vkCode == VK_RIGHT ? Dock::Edge::Right : vkCode == VK_UP ? Dock::Edge::Top : Dock::Edge::Bottom;
+    DockMoveWindow(GetForegroundWindow(), edge);
+    UpdateCaptionButtons();
+}
+
+void FancyZones::SyncCaptionButtonsTimer() noexcept
+{
+    if (FancyZonesSettings::settings().dockCaptionButtons)
+    {
+        SetTimer(m_window, CaptionButtonsTimerId, CaptionButtonsRefreshMillis, nullptr);
+    }
+    else
+    {
+        KillTimer(m_window, CaptionButtonsTimerId);
+        UpdateCaptionButtons();
+    }
+}
+
+void FancyZones::UpdateCaptionButtons() noexcept
+{
+    if (!m_captionButtons)
     {
         return;
+    }
+
+    // Not on a window being dragged or resized, the buttons would trail behind it
+    if (m_windowMouseSnapper || m_resizedWindow)
+    {
+        m_captionButtons->Hide();
+        return;
+    }
+
+    std::vector<HWND> windows;
+    if (FancyZonesSettings::settings().dockCaptionButtons && !FancyZonesSettings::settings().spanZonesAcrossMonitors)
+    {
+        for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+        {
+            for (const auto leaf : workArea ? workArea->DockTree().Leaves() : std::vector<Dock::Node*>{})
+            {
+                if (leaf->window && !leaf->hidden)
+                {
+                    windows.push_back(leaf->window);
+                }
+            }
+        }
+    }
+
+    m_captionButtons->Update(windows);
+}
+
+bool FancyZones::CanDockMove(HWND window) const noexcept
+{
+    if (!FancyZonesWindowProcessing::IsProcessableManually(window) || FancyZonesSettings::settings().spanZonesAcrossMonitors)
+    {
+        return false;
     }
 
     // A window of an elevated app can't be moved from here
-    if (!is_process_elevated() && IsProcessOfWindowElevated(window))
+    return is_process_elevated() || !IsProcessOfWindowElevated(window);
+}
+
+void FancyZones::DockMoveWindow(HWND window, Dock::Edge edge) noexcept
+{
+    if (!CanDockMove(window))
     {
         return;
     }
 
-    const auto edge = vkCode == VK_LEFT ? Dock::Edge::Left : vkCode == VK_RIGHT ? Dock::Edge::Right : vkCode == VK_UP ? Dock::Edge::Top : Dock::Edge::Bottom;
     const auto& workAreas = m_workAreaConfiguration.GetAllWorkAreas();
 
     WorkArea* current = nullptr;

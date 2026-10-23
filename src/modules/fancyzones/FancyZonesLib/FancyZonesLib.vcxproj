@@ -55,6 +55,7 @@
     <ClInclude Include="JsonHelpers.h" />
     <ClInclude Include="KeyboardInput.h" />
     <ClInclude Include="KeyState.h" />
+    <ClInclude Include="DockCaptionButtons.h" />
     <ClInclude Include="DockTree.h" />
     <ClInclude Include="FancyZonesData\DockLayouts.h" />
     <ClInclude Include="FancyZonesData\LayoutHotkeys.h" />
@@ -114,6 +115,7 @@
     <ClCompile Include="FancyZonesWinHookEventIDs.cpp" />
     <ClCompile Include="FancyZonesData.cpp" />
     <ClCompile Include="JsonHelpers.cpp" />
+    <ClCompile Include="DockCaptionButtons.cpp" />
     <ClCompile Include="DockTree.cpp" />
     <ClCompile Include="FancyZonesData\DockLayouts.cpp">
       <PrecompiledHeaderFile>../pch.h</PrecompiledHeaderFile>

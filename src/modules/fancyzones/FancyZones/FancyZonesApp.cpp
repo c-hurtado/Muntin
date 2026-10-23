@@ -93,7 +93,8 @@ void FancyZonesApp::InitHooks()
         }
     }
 
-    std::array<DWORD, 11> events_to_subscribe = {
+    std::array<DWORD, 12> events_to_subscribe = {
+        EVENT_SYSTEM_FOREGROUND,
         EVENT_SYSTEM_MOVESIZESTART,
         EVENT_SYSTEM_MOVESIZEEND,
         EVENT_SYSTEM_MINIMIZESTART,
@@ -176,6 +177,7 @@ void FancyZonesApp::HandleWinHookEvent(WinHookEvent* data) noexcept
     }
     break;
 
+    case EVENT_SYSTEM_FOREGROUND:
     case EVENT_SYSTEM_MINIMIZESTART:
     case EVENT_SYSTEM_MINIMIZEEND:
     case EVENT_OBJECT_HIDE:
