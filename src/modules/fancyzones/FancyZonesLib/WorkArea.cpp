@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "WorkArea.h"
 
+#include <cfloat>
+
 #include <common/logger/logger.h>
 #include <common/utils/elevation.h>
 #include <common/utils/process_path.h>
@@ -285,7 +287,7 @@ namespace
         return FancyZonesSettings::settings().dockGap;
     }
 
-    std::optional<Dock::Target> DockTarget(Dock::Tree& tree, const RECT& area, POINT pt)
+    std::optional<Dock::Target> DockTarget(Dock::Tree& tree, const RECT& area, POINT pt, bool edgesOnly)
     {
         const auto& settings = FancyZonesSettings::settings();
 
@@ -295,7 +297,7 @@ namespace
             return std::nullopt;
         }
 
-        return tree.TargetFromPoint(area, pt, settings.dockGap, settings.dockEdgeBand, settings.dockWindowEdgePercent / 100.0f);
+        return tree.TargetFromPoint(area, pt, settings.dockGap, edgesOnly ? settings.dockEdgeSnapBand : settings.dockEdgeBand, settings.dockWindowEdgePercent / 100.0f, edgesOnly);
     }
     // SizeWindowToRect moves windows asynchronously: a window isn't where it was sent right away
     constexpr ULONGLONG PlacementSettleMillis = 1000;
@@ -306,7 +308,7 @@ Dock::Tree& WorkArea::DockTree() const
     return DockLayouts::instance().Tree(m_uniqueId);
 }
 
-void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
+void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow, bool edgesOnly)
 {
     if (!m_zonesOverlay)
     {
@@ -314,11 +316,11 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
     }
 
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-    const auto target = DockTarget(DockTree(), area, pt);
+    const auto target = DockTarget(DockTree(), area, pt, edgesOnly);
 
     // Glow on the nearest work area edge, stronger the closer the cursor gets to the dock band
     const auto& settings = FancyZonesSettings::settings();
-    const float band = static_cast<float>(settings.dockEdgeBand);
+    const float band = static_cast<float>(edgesOnly ? settings.dockEdgeSnapBand : settings.dockEdgeBand);
     const float reach = band * 3.f;
     if (!m_dockColors)
     {
@@ -327,9 +329,9 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
     }
     const std::pair<ZonesOverlay::EdgeGuide::Side, float> distances[] = {
         { ZonesOverlay::EdgeGuide::Side::Left, static_cast<float>(pt.x - area.left) },
-        { ZonesOverlay::EdgeGuide::Side::Top, static_cast<float>(pt.y - area.top) },
+        { ZonesOverlay::EdgeGuide::Side::Top, edgesOnly ? FLT_MAX : static_cast<float>(pt.y - area.top) },
         { ZonesOverlay::EdgeGuide::Side::Right, static_cast<float>(area.right - pt.x) },
-        { ZonesOverlay::EdgeGuide::Side::Bottom, static_cast<float>(area.bottom - pt.y) },
+        { ZonesOverlay::EdgeGuide::Side::Bottom, edgesOnly ? FLT_MAX : static_cast<float>(area.bottom - pt.y) },
     };
     const auto nearest = std::min_element(std::begin(distances), std::end(distances), [](const auto& a, const auto& b) { return a.second < b.second; });
     std::optional<ZonesOverlay::EdgeGuide> guide;
@@ -373,13 +375,13 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
     m_zonesOverlay->Show();
 }
 
-bool WorkArea::DockWindow(HWND window, POINT pt)
+bool WorkArea::DockWindow(HWND window, POINT pt, bool edgesOnly)
 {
     auto& tree = DockTree();
     const bool removed = tree.Remove(window);
 
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-    const auto target = DockTarget(tree, area, pt);
+    const auto target = DockTarget(tree, area, pt, edgesOnly);
     if (target)
     {
         tree.Insert(window, get_process_path(window), target.value());

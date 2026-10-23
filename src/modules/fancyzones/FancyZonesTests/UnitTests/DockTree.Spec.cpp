@@ -10,6 +10,37 @@ namespace FancyZonesUnitTests
 {
     TEST_CLASS (DockTreeUnitTests)
     {
+    public:
+        TEST_METHOD (EdgesOnlyDocksTheLeftAndRightEdgeNotTheOthers)
+        {
+            Dock::Tree tree;
+            const auto left = tree.TargetFromPoint(m_area, { 3, 400 }, 0, 12, 0.3f, true);
+            Assert::IsTrue(left.has_value());
+            Assert::IsTrue(left->edge == Dock::Edge::Left);
+            Assert::AreEqual(500L, left->preview.right);
+
+            const auto right = tree.TargetFromPoint(m_area, { 997, 400 }, 0, 12, 0.3f, true);
+            Assert::IsTrue(right.has_value());
+            Assert::IsTrue(right->edge == Dock::Edge::Right);
+
+            // The top maximizes, the bottom is the taskbar
+            Assert::IsFalse(tree.TargetFromPoint(m_area, { 500, 3 }, 0, 12, 0.3f, true).has_value());
+            Assert::IsFalse(tree.TargetFromPoint(m_area, { 500, 797 }, 0, 12, 0.3f, true).has_value());
+        }
+
+        TEST_METHOD (EdgesOnlyUsesItsOwnBandAndSkipsDockedWindows)
+        {
+            Dock::Tree tree;
+            tree.Insert(m_a, L"", tree.TargetFromPoint(m_area, { 5, 400 }, 0).value());
+
+            // Outside the band, and inside the docked window: nothing
+            Assert::IsFalse(tree.TargetFromPoint(m_area, { 20, 400 }, 0, 12, 0.3f, true).has_value());
+            Assert::IsFalse(tree.TargetFromPoint(m_area, { 700, 400 }, 0, 12, 0.3f, true).has_value());
+            // On the edge it docks against the whole area, as with Shift
+            Assert::IsTrue(tree.TargetFromPoint(m_area, { 995, 400 }, 0, 12, 0.3f, true).has_value());
+        }
+
+    private:
         const RECT m_area{ 0, 0, 1000, 800 };
         const HWND m_a = reinterpret_cast<HWND>(1);
         const HWND m_b = reinterpret_cast<HWND>(2);

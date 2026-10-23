@@ -65,8 +65,9 @@ public:
 
     // Docking. Points are in work area window coordinates.
     Dock::Tree& DockTree() const;
-    void ShowDockPreview(POINT pt, HWND draggedWindow);
-    bool DockWindow(HWND window, POINT pt);
+    // edgesOnly: a drag without Shift, only the left and right edge of the work area dock
+    void ShowDockPreview(POINT pt, HWND draggedWindow, bool edgesOnly = false);
+    bool DockWindow(HWND window, POINT pt, bool edgesOnly = false);
     bool UndockWindow(HWND window);
     // Docks the window against that edge of the work area
     void DockAtEdge(HWND window, Dock::Edge edge);

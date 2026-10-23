@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 using namespace Dock;
 
@@ -226,7 +227,7 @@ Node* Tree::Find(HWND window) const
     return nullptr;
 }
 
-std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap, LONG edgeBand, float windowEdgeShare)
+std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap, LONG edgeBand, float windowEdgeShare, bool edgesOnly)
 {
     if (!PtInRect(&area, pt))
     {
@@ -235,9 +236,9 @@ std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap,
 
     const std::array<std::pair<LONG, Edge>, 4> areaEdges = { {
         { pt.x - area.left, Edge::Left },
-        { pt.y - area.top, Edge::Top },
+        { edgesOnly ? (std::numeric_limits<LONG>::max)() : pt.y - area.top, Edge::Top },
         { area.right - pt.x, Edge::Right },
-        { area.bottom - pt.y, Edge::Bottom },
+        { edgesOnly ? (std::numeric_limits<LONG>::max)() : area.bottom - pt.y, Edge::Bottom },
     } };
     const auto nearestAreaEdge = *std::min_element(areaEdges.begin(), areaEdges.end());
 
@@ -245,8 +246,9 @@ std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap,
     const bool slotsOnly = root && !Occupies(*root);
 
     std::optional<Target> target;
-    bool found = nearestAreaEdge.first < edgeBand;
-    if (found)
+    // Windows already in the layout are no targets when only the edges are
+    bool found = edgesOnly || nearestAreaEdge.first < edgeBand;
+    if (nearestAreaEdge.first < edgeBand)
     {
         target = Target{ .node = nullptr, .edge = nearestAreaEdge.second, .fill = false, .preview = HalfAt(area, nearestAreaEdge.second) };
     }

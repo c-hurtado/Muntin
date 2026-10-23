@@ -130,6 +130,8 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_overrideSnapHotkeys` | Win+arrows move the focus between docked windows, Shift+Win+arrows move windows in the layout | `false` |
 | `fancyzones_excluded_apps` | Apps that are never docked: one name or path fragment per line (`\r` or `\n` between entries in the JSON string) | empty |
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
+| `fancyzones_dockEdgeSnap` | A window dragged to the left or right edge of a screen docks there without Shift, like Windows snap. The top edge is left to Windows (it maximizes), and the bottom edge is the taskbar. Only with `fancyzones_shiftDrag` on. | `true` |
+| `fancyzones_dockEdgeSnapBand` | How close to that edge, in pixels, the cursor must be (1 to 100) | 12 |
 | `fancyzones_restoreSize` | A window that is undocked gets back the size it had before | `false` |
 | `fancyzones_dockCaptionButtons` | Show < > buttons left of the minimize button of every docked window. They move the window to the neighbor on that side, like Shift+Win+Left and Shift+Win+Right. | `true` |
 

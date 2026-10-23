@@ -71,7 +71,9 @@ void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bo
 
     // No preview until the window moves: until then it is still in its layout
     auto iter = m_activeWorkAreas.find(monitor);
-    if (isSnapping && m_moved && iter != m_activeWorkAreas.end())
+    // Without Shift only the edges of the work area dock, like the snap of Windows
+    const bool edgesOnly = !isSnapping && FancyZonesSettings::settings().shiftDrag && FancyZonesSettings::settings().dockEdgeSnap;
+    if ((isSnapping || edgesOnly) && m_moved && iter != m_activeWorkAreas.end())
     {
         // The drag has moved to a different monitor.
         // Change work area
@@ -89,7 +91,7 @@ void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bo
         {
             POINT ptClient = ptScreen;
             MapWindowPoints(nullptr, m_currentWorkArea->GetWorkAreaWindow(), &ptClient, 1);
-            m_currentWorkArea->ShowDockPreview(ptClient, m_window);
+            m_currentWorkArea->ShowDockPreview(ptClient, m_window, edgesOnly);
         }
     }
 }
@@ -128,10 +130,23 @@ void WindowMouseSnap::MoveSizeEnd()
     // or the window is maximized by Windows when the cursor hits the screen top border
     bool docked = false;
     POINT pt{};
-    if (m_snappingMode && m_currentWorkArea && !FancyZonesWindowUtils::IsWindowMaximized(m_window) && GetPhysicalCursorPos(&pt))
+    const bool edgesOnly = !m_snappingMode && FancyZonesSettings::settings().shiftDrag && FancyZonesSettings::settings().dockEdgeSnap;
+    if ((m_snappingMode || edgesOnly) && m_currentWorkArea && !FancyZonesWindowUtils::IsWindowMaximized(m_window) && GetPhysicalCursorPos(&pt))
     {
         MapWindowPoints(nullptr, m_currentWorkArea->GetWorkAreaWindow(), &pt, 1);
-        docked = m_currentWorkArea->DockWindow(m_window, pt);
+        docked = m_currentWorkArea->DockWindow(m_window, pt, edgesOnly);
+    }
+
+    if (edgesOnly)
+    {
+        // Nothing turns the preview off for a drag without Shift
+        for (const auto& [_, workArea] : m_activeWorkAreas)
+        {
+            if (workArea)
+            {
+                workArea->HideZones();
+            }
+        }
     }
 
     if (!docked)

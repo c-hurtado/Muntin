@@ -56,7 +56,9 @@ namespace Dock
         // edgeBand: distance in pixels from an edge of the area within which the window docks against the whole area.
         // windowEdgeShare: share of a docked window, from each of its edges, within which the window docks against it.
         // The middle of a docked window is no target, so a window can be dropped there without docking.
-        std::optional<Target> TargetFromPoint(const RECT& area, POINT pt, int gap, LONG edgeBand = 48, float windowEdgeShare = 0.3f);
+        // edgesOnly: only the left and right edge of the area are targets, like the edges that Windows snaps to
+        // (the top one maximizes, the bottom one is the taskbar).
+        std::optional<Target> TargetFromPoint(const RECT& area, POINT pt, int gap, LONG edgeBand = 48, float windowEdgeShare = 0.3f, bool edgesOnly = false);
         void Insert(HWND window, const std::wstring& app, const Target& target);
         // Swaps the window with the leaf next to it on that side. False when there is none.
         bool Move(HWND window, const RECT& area, int gap, Edge direction);
