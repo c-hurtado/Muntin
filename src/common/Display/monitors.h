@@ -6,7 +6,6 @@
 #include <optional>
 #include <vector>
 
-// TODO: merge with FZ::Rect
 struct Box
 {
     RECT rect;

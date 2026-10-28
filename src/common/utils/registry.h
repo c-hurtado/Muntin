@@ -491,7 +491,6 @@ namespace registry
             versionPath += powertoysVersion;
 
             using vec_t = std::vector<registry::ValueChange>;
-            // TODO: verify that we actually need all of those
             vec_t changes = { { scope, clsidPath, L"DisplayName", displayName },
                               { scope, clsidPath, std::nullopt, className },
                               { scope, inprocServerPath, std::nullopt, fullPathToHandler },

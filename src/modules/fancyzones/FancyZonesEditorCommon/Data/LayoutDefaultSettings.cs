@@ -6,7 +6,6 @@ namespace FancyZonesEditorCommon.Data
 {
     public class LayoutDefaultSettings
     {
-        // TODO: share the constants b/w C# Editor and FancyZoneLib
         public const bool DefaultShowSpacing = true;
 
         public const int DefaultSpacing = 16;

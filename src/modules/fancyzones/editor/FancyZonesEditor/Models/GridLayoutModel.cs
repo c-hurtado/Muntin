@@ -74,7 +74,6 @@ namespace FancyZonesEditor.Models
 
         // CellChildMap - represents which "children" belong in which grid cells;
         //  shows spanning children by the same index appearing in adjacent cells
-        //  TODO: ideally no setter here - this means moving logic like "split" over to model
         public int[,] CellChildMap { get; set; }
 
         // RowPercents - represents the %age height of each row in the grid
