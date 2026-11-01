@@ -65,6 +65,7 @@ struct Settings
     std::wstring zoneNumberColor = L"#000000";
     int zoneHighlightOpacity = 50;
     bool dockCaptionButtons = true; // < > buttons next to the caption buttons of the docked windows
+    bool dockAutoTile = false; // New windows dock by themselves, splitting the focused docked window
     bool dockEdgeSnap = true; // A window dragged to the left or right edge docks there without Shift, like Windows snap
     int dockEdgeSnapBand = 12; // Pixels from that edge within which it docks
     int dockGap = 8; // Pixels left between docked windows

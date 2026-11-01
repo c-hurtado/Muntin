@@ -6,6 +6,7 @@ extern UINT WM_PRIV_LOCATIONCHANGE;
 extern UINT WM_PRIV_NAMECHANGE;
 extern UINT WM_PRIV_WINDOWCREATED;
 extern UINT WM_PRIV_WINDOWDESTROYED;
+extern UINT WM_PRIV_DOCK_NEW_WINDOW; // Scheduled when a window is created, and only then: it doesn't come when one is shown again
 extern UINT WM_PRIV_INIT; // Scheduled when FancyZones is initialized
 extern UINT WM_PRIV_VD_SWITCH; // Scheduled when virtual desktop switch occurs
 extern UINT WM_PRIV_EDITOR; // Scheduled when the editor exits

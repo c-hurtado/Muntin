@@ -99,6 +99,21 @@ namespace
     constexpr UINT_PTR DockClaimTimerId = 0x444B434C;
     constexpr UINT DockClaimRetryMillis = 500;
 
+    // A new window is looked at until it can be docked: it may start hidden, or the shell may not know it yet
+    constexpr UINT_PTR DockNewWindowTimerId = 0x444B4E57;
+    constexpr UINT DockNewWindowRetryMillis = 250;
+    constexpr ULONGLONG DockNewWindowWaitMillis = 5000;
+
+    constexpr UINT_PTR DockSaveTimerId = 0x444B5356;
+    constexpr UINT DockSaveDelayMillis = 1000;
+
+    // wparam of WM_PRIV_SNAP_HOTKEY; lparam is the key for the first two and the pixels for the last two
+    constexpr WPARAM DockKeyMove = 0;
+    constexpr WPARAM DockKeyFocus = 1;
+    constexpr WPARAM DockKeyFlip = 2;
+    constexpr WPARAM DockKeyGrowWidth = 3;
+    constexpr WPARAM DockKeyGrowHeight = 4;
+
     struct WindowRotationSnapshot
     {
         HWND window{};
@@ -329,6 +344,10 @@ public:
             if (data->idObject == OBJID_WINDOW)
             {
                 PostMessageW(m_window, WM_PRIV_WINDOWCREATED, wparam, lparam);
+                if (data->event == EVENT_OBJECT_CREATE)
+                {
+                    PostMessageW(m_window, WM_PRIV_DOCK_NEW_WINDOW, wparam, lparam);
+                }
             }
             break;
 
@@ -411,6 +430,9 @@ private:
     void DockVisibility(HWND window, bool minimizing) noexcept;
     void DockSlot(int key, bool save) noexcept;
     void DockMoveByKey(DWORD vkCode) noexcept;
+    void DockKey(WPARAM kind, LONG pixels) noexcept;
+    void DockNewWindows() noexcept;
+    bool DockAuto(HWND window) noexcept;
     void DockMoveWindow(HWND window, Dock::Edge edge) noexcept;
     bool CanDockMove(HWND window) const noexcept;
     void UpdateCaptionButtons() noexcept;
@@ -431,7 +453,8 @@ private:
     HWND m_resizedWindow{}; // Window being resized by the user
     RECT m_resizedWindowRect{}; // Its frame when the resize started
     bool m_dockClaimPending{}; // The claim of the slots kept for apps is about to be tried again
-    DWORD m_dockSlotKey{}; // Digit of the dock layout hotkey that is held down
+    DWORD m_dockSlotKey{}; // Key of the dock hotkey that is held down, for those that act once per press
+    std::vector<std::pair<HWND, ULONGLONG>> m_dockNewWindows; // Windows waiting to be docked, and until when
     std::wstring m_dockLoadName; // Named dock layout to load on WM_PRIV_DOCK_LOAD, empty when none is pending
     std::map<std::wstring, ULONGLONG> m_dockLaunched; // Apps started by a named layout, and when
     std::unique_ptr<DockCaptionButtons::Overlays> m_captionButtons;
@@ -870,6 +893,31 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
         }
     }
 
+    // Win+J turns the split of a docked window. Win+minus and Win+plus resize it: its width, with Shift its height; by a little with Alt,
+    // by a lot with Ctrl. They repeat while held, and on any other window the keys keep their Windows meaning.
+    if (win && FancyZonesSettings::settings().overrideSnapHotkeys && !m_windowMouseSnapper)
+    {
+        const bool grow = info->vkCode == VK_OEM_PLUS || info->vkCode == VK_ADD;
+        const bool shrink = info->vkCode == VK_OEM_MINUS || info->vkCode == VK_SUBTRACT;
+        if ((grow || shrink) && IsDocked(GetForegroundWindow()))
+        {
+            const LONG step = alt ? 25 : ctrl ? 300 : 100;
+            PostMessageW(m_window, WM_PRIV_SNAP_HOTKEY, shift ? DockKeyGrowHeight : DockKeyGrowWidth, static_cast<LPARAM>(grow ? step : -step));
+            return true;
+        }
+
+        if (info->vkCode == 'J' && !shift && !ctrl && !alt && IsDocked(GetForegroundWindow()))
+        {
+            if (m_dockSlotKey != info->vkCode)
+            {
+                m_dockSlotKey = info->vkCode;
+                PostMessageW(m_window, WM_PRIV_SNAP_HOTKEY, DockKeyFlip, 0);
+            }
+
+            return true;
+        }
+    }
+
     if (win && ctrl && alt)
     {
         const int digit = DigitFromVkCode(info->vkCode);
@@ -1104,13 +1152,17 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
         if (message == WM_PRIV_SNAP_HOTKEY)
         {
-            if (wparam)
+            if (wparam == DockKeyFocus)
             {
                 DockFocusByKey(static_cast<DWORD>(lparam));
             }
-            else
+            else if (wparam == DockKeyMove)
             {
                 DockMoveByKey(static_cast<DWORD>(lparam));
+            }
+            else
+            {
+                DockKey(wparam, static_cast<LONG>(lparam));
             }
         }
         else if (message == WM_PRIV_INIT)
@@ -1252,6 +1304,28 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_CAPTION_BUTTONS_REFRESH || (message == WM_TIMER && wparam == CaptionButtonsTimerId))
         {
             UpdateCaptionButtons();
+        }
+        else if (message == WM_PRIV_DOCK_NEW_WINDOW)
+        {
+            const auto created = reinterpret_cast<HWND>(wparam);
+            if (FancyZonesSettings::settings().dockAutoTile && GetAncestor(created, GA_ROOT) == created)
+            {
+                if (m_dockNewWindows.empty())
+                {
+                    SetTimer(m_window, DockNewWindowTimerId, DockNewWindowRetryMillis, nullptr);
+                }
+
+                m_dockNewWindows.emplace_back(created, GetTickCount64() + DockNewWindowWaitMillis);
+            }
+        }
+        else if (message == WM_TIMER && wparam == DockNewWindowTimerId)
+        {
+            DockNewWindows();
+        }
+        else if (message == WM_TIMER && wparam == DockSaveTimerId)
+        {
+            KillTimer(m_window, DockSaveTimerId);
+            DockLayouts::instance().SaveData();
         }
         else if (message == WM_TIMER && wparam == DockClaimTimerId)
         {
@@ -1960,6 +2034,86 @@ void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
     const auto edge = vkCode == VK_LEFT ? Dock::Edge::Left : vkCode == VK_RIGHT ? Dock::Edge::Right : vkCode == VK_UP ? Dock::Edge::Top : Dock::Edge::Bottom;
     DockMoveWindow(GetForegroundWindow(), edge);
     UpdateCaptionButtons();
+}
+
+void FancyZones::DockKey(WPARAM kind, LONG pixels) noexcept
+{
+    const auto window = GetForegroundWindow();
+    if (!CanDockMove(window))
+    {
+        return;
+    }
+
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (workArea && workArea->DockTree().Find(window))
+        {
+            if (kind == DockKeyFlip)
+            {
+                workArea->DockToggleSplit(window);
+            }
+            else if (workArea->DockGrow(window, kind == DockKeyGrowWidth, pixels))
+            {
+                SetTimer(m_window, DockSaveTimerId, DockSaveDelayMillis, nullptr);
+            }
+
+            break;
+        }
+    }
+
+    UpdateCaptionButtons();
+}
+
+void FancyZones::DockNewWindows() noexcept
+{
+    const auto now = GetTickCount64();
+    std::erase_if(m_dockNewWindows, [&](const std::pair<HWND, ULONGLONG>& item) {
+        const auto window = item.first;
+        if (!IsWindow(window) || now > item.second)
+        {
+            return true;
+        }
+
+        // A slot kept for its app comes first
+        DockClaim(window);
+        if (IsDocked(window))
+        {
+            return true;
+        }
+
+        // A window that opens maximized or can't be resized stays as it is
+        const bool resizable = FancyZonesWindowUtils::HasStyle(GetWindowLong(window, GWL_STYLE), WS_THICKFRAME) && !FancyZonesWindowUtils::IsWindowMaximized(window);
+        return !m_windowMouseSnapper && resizable && FancyZonesWindowProcessing::IsProcessableAutomatically(window) && CanDockMove(window) && DockAuto(window);
+    });
+
+    if (m_dockNewWindows.empty())
+    {
+        KillTimer(m_window, DockNewWindowTimerId);
+    }
+
+    UpdateCaptionButtons();
+}
+
+bool FancyZones::DockAuto(HWND window) noexcept
+{
+    const auto workArea = m_workAreaConfiguration.GetWorkAreaFromWindow(window);
+    if (!workArea)
+    {
+        return false;
+    }
+
+    // It stays on the monitor it opened on. The docked window nearest the top of the z-order is the one last in use there:
+    // the new window itself already has the focus.
+    for (auto other = GetTopWindow(nullptr); other; other = GetWindow(other, GW_HWNDNEXT))
+    {
+        const auto leaf = other != window ? workArea->DockTree().Find(other) : nullptr;
+        if (leaf && !leaf->hidden)
+        {
+            return workArea->DockAuto(window, other);
+        }
+    }
+
+    return workArea->DockAuto(window, nullptr);
 }
 
 void FancyZones::SyncCaptionButtonsTimer() noexcept

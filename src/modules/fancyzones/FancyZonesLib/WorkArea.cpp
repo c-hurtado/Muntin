@@ -405,6 +405,47 @@ void WorkArea::DockAtEdge(HWND window, Dock::Edge edge)
     DockLayouts::instance().SaveData();
 }
 
+bool WorkArea::DockAuto(HWND window, HWND focused)
+{
+    auto& tree = DockTree();
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const auto target = tree.AutoTarget(area, DockGap(), focused);
+    if (!target)
+    {
+        return false;
+    }
+
+    tree.Insert(window, get_process_path(window), target.value());
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+    return true;
+}
+
+bool WorkArea::DockToggleSplit(HWND window)
+{
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    if (!DockTree().ToggleSplit(window, area, DockGap()))
+    {
+        return false;
+    }
+
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+    return true;
+}
+
+bool WorkArea::DockGrow(HWND window, bool sideBySide, LONG delta)
+{
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    if (!DockTree().Grow(window, area, DockGap(), sideBySide, delta))
+    {
+        return false;
+    }
+
+    ApplyDockLayout();
+    return true;
+}
+
 bool WorkArea::DockMove(HWND window, Dock::Edge direction)
 {
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };

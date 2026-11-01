@@ -109,6 +109,28 @@ namespace
         }
     }
 
+    // The nodes from the root down to the window, with their rects. Empty when the window has no space.
+    std::vector<std::pair<Node*, RECT>> PathTo(Node& root, const RECT& area, int gap, HWND window)
+    {
+        std::vector<std::pair<Node*, RECT>> path;
+        std::vector<std::pair<Node*, RECT>> current;
+        Visit(root, area, gap, [&](Node& node, const RECT& rect, size_t depth) {
+            current.resize(depth);
+            current.emplace_back(&node, rect);
+            if (node.IsLeaf() && node.window == window)
+            {
+                path = current;
+            }
+        });
+
+        return path;
+    }
+
+    bool DividesSpace(const Node& split) noexcept
+    {
+        return TakesSpace(*split.first, *split.second) && TakesSpace(*split.second, *split.first);
+    }
+
     void CollectLeaves(Node* node, std::vector<Node*>& leaves)
     {
         if (!node)
@@ -382,6 +404,67 @@ void Tree::Insert(HWND window, const std::wstring& app, const Target& target)
     *owner = std::move(split);
 }
 
+std::optional<Target> Tree::AutoTarget(const RECT& area, int gap, HWND focused)
+{
+    std::optional<Target> target;
+    if (root && Occupies(*root))
+    {
+        Node* slot = nullptr;
+        RECT slotRect{};
+        Node* best = nullptr;
+        RECT bestRect{};
+        LONG bestSize = 0;
+        Visit(*root, area, gap, [&](Node& node, const RECT& rect, size_t) {
+            if (!node.IsLeaf())
+            {
+                return;
+            }
+
+            if (!node.window)
+            {
+                // A slot kept for an app waits for that app
+                if (node.app.empty() && !slot)
+                {
+                    slot = &node;
+                    slotRect = rect;
+                }
+
+                return;
+            }
+
+            const LONG size = (rect.right - rect.left) * (rect.bottom - rect.top);
+            if (!node.hidden && (node.window == focused || ((best == nullptr || best->window != focused) && size > bestSize)))
+            {
+                best = &node;
+                bestRect = rect;
+                bestSize = size;
+            }
+        });
+
+        if (slot)
+        {
+            target = Target{ .node = slot, .edge = Edge::Left, .fill = true, .preview = slotRect };
+        }
+        else if (best)
+        {
+            const Edge edge = bestRect.right - bestRect.left >= bestRect.bottom - bestRect.top ? Edge::Right : Edge::Bottom;
+            target = Target{ .node = best, .edge = edge, .fill = false, .preview = HalfAt(bestRect, edge) };
+        }
+    }
+
+    if (!target)
+    {
+        target = Target{ .node = nullptr, .edge = Edge::Left, .fill = false, .preview = HalfAt(area, Edge::Left) };
+    }
+
+    if (target->preview.right - target->preview.left < MinTargetSize || target->preview.bottom - target->preview.top < MinTargetSize)
+    {
+        return std::nullopt;
+    }
+
+    return target;
+}
+
 bool Tree::Move(HWND window, const RECT& area, int gap, Edge direction)
 {
     if (!window || !root || !Occupies(*root))
@@ -479,18 +562,7 @@ bool Tree::Resize(HWND window, const RECT& area, int gap, const RECT& fromRect, 
         return false;
     }
 
-    // Nodes from the root down to the window, with their rects
-    std::vector<std::pair<Node*, RECT>> path;
-    std::vector<std::pair<Node*, RECT>> current;
-    Visit(*root, area, gap, [&](Node& node, const RECT& rect, size_t depth) {
-        current.resize(depth);
-        current.emplace_back(&node, rect);
-        if (node.IsLeaf() && node.window == window)
-        {
-            path = current;
-        }
-    });
-
+    const auto path = PathTo(*root, area, gap, window);
     if (path.empty())
     {
         return false;
@@ -514,7 +586,7 @@ bool Tree::Resize(HWND window, const RECT& area, int gap, const RECT& fromRect, 
                 continue;
             }
 
-            if (!TakesSpace(*split.first, *split.second) || !TakesSpace(*split.second, *split.first))
+            if (!DividesSpace(split))
             {
                 continue;
             }
@@ -540,6 +612,60 @@ bool Tree::Resize(HWND window, const RECT& area, int gap, const RECT& fromRect, 
     moveEdge(fromRect.bottom, toRect.bottom, false, true);
 
     return changed;
+}
+
+bool Tree::ToggleSplit(HWND window, const RECT& area, int gap)
+{
+    if (!window || !root || !Occupies(*root))
+    {
+        return false;
+    }
+
+    const auto path = PathTo(*root, area, gap, window);
+    for (size_t i = path.size(); i-- > 1;)
+    {
+        Node& split = *path[i - 1].first;
+        if (DividesSpace(split))
+        {
+            split.sideBySide = !split.sideBySide;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool Tree::Grow(HWND window, const RECT& area, int gap, bool sideBySide, LONG delta)
+{
+    if (!window || !root || !Occupies(*root))
+    {
+        return false;
+    }
+
+    const auto path = PathTo(*root, area, gap, window);
+    for (size_t i = path.size(); i-- > 1;)
+    {
+        Node& split = *path[i - 1].first;
+        if (split.sideBySide != sideBySide || !DividesSpace(split))
+        {
+            continue;
+        }
+
+        const RECT& rect = path[i - 1].second;
+        const LONG extent = sideBySide ? rect.right - rect.left : rect.bottom - rect.top;
+        if (extent <= 0)
+        {
+            return false;
+        }
+
+        const bool inFirst = split.first.get() == path[i].first;
+        const float ratio = std::clamp(split.ratio + (inFirst ? delta : -delta) / static_cast<float>(extent), MinRatio, 1.0f - MinRatio);
+        const bool changed = ratio != split.ratio;
+        split.ratio = ratio;
+        return changed;
+    }
+
+    return false;
 }
 
 std::vector<std::pair<HWND, RECT>> Tree::WindowRects(const RECT& area, int gap) const

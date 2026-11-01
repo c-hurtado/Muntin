@@ -71,6 +71,11 @@ public:
     bool UndockWindow(HWND window);
     // Docks the window against that edge of the work area
     void DockAtEdge(HWND window, Dock::Edge edge);
+    // Docks a new window without a drag. focused: the docked window it splits, may be null. False when there is no room.
+    bool DockAuto(HWND window, HWND focused);
+    bool DockToggleSplit(HWND window);
+    // Doesn't save: a held key sends this many times a second, the caller saves when it stops
+    bool DockGrow(HWND window, bool sideBySide, LONG delta);
     // Swaps a docked window with its neighbor on that side. False when it has none.
     bool DockMove(HWND window, Dock::Edge direction);
     bool DockResized(HWND window, const RECT& fromScreenRect);

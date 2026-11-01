@@ -6,7 +6,7 @@ FanciestZones is a personal fork of PowerToys FancyZones. It docks windows by dr
 
 | What | Where |
 |---|---|
-| Executable | `C:\Users\carlo\Tools\FanciestZones\x64\Debug\FanciestZones.exe` |
+| Executable | `%LOCALAPPDATA%\FanciestZones\FanciestZones.exe` (Release build, copied from `x64\Release`) |
 | Starts at sign-in through | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FanciestZones.lnk` |
 | Stop it | End `FanciestZones.exe` in Task Manager |
 | Start it again | Run the shortcut or the executable |
@@ -52,6 +52,28 @@ Shift+Win+arrows move the window:
 
 They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
 
+Three more shortcuts act on a docked window, and on any other window the keys keep their Windows meaning:
+
+| Keys | Action |
+|---|---|
+| Win+J | Turns the split around the window: side by side becomes one above the other, and back |
+| Win+plus, Win+minus | Make the window wider or narrower by 100 pixels. The neighbor follows. They repeat while held. |
+| Add Shift | Taller or shorter instead |
+| Add Alt | 25 pixels |
+| Add Ctrl | 300 pixels |
+
+Nothing happens when no split runs in that direction next to the window. Win+plus and Win+minus are the Windows Magnifier keys: on a docked window FanciestZones takes them.
+
+### Dock new windows by themselves
+
+With `fancyzones_dockAutoTile` on, a new window docks on the monitor it opens on, as in Hyprland's dwindle layout:
+
+1. If the layout has an empty place, the window takes it. A place kept for an app waits for that app.
+2. Otherwise it splits the docked window last in use on that monitor, across the longer side of that window, and takes the right or bottom half.
+3. With nothing docked it takes the left half of its monitor.
+
+A window stays floating when it opens maximized, can't be resized, belongs to another window (most dialogs), is in `fancyzones_excluded_apps`, or takes more than 5 seconds to appear. Only a newly created window docks: one that comes back from the tray or from another virtual desktop doesn't, and a window you undock stays undocked.
+
 ### Save and recall layouts
 
 | Keys | Action |
@@ -66,7 +88,7 @@ Saving a monitor with nothing docked changes nothing: the layout already saved u
 A named layout covers every monitor, and loading it starts the apps that aren't open.
 
 1. Dock the windows the way you want them, on any monitors.
-2. In a terminal or the Run box (Win+R): `C:\Users\carlo\Tools\FanciestZones\x64\Debug\FanciestZones.exe save DevLayout`
+2. In a terminal or the Run box (Win+R): `FanciestZones save DevLayout` (the install folder is on the user PATH)
 3. Load it from Command Palette or Windows search: type `DevLayout` and run it. The same works with `FanciestZones.exe load DevLayout`.
 
 | Command | What it does |
@@ -130,6 +152,7 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_overrideSnapHotkeys` | Win+arrows move the focus between docked windows, Shift+Win+arrows move windows in the layout | `false` |
 | `fancyzones_excluded_apps` | Apps that are never docked: one name or path fragment per line (`\r` or `\n` between entries in the JSON string) | empty |
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
+| `fancyzones_dockAutoTile` | New windows dock by themselves (see "Dock new windows by themselves") | `false` |
 | `fancyzones_dockEdgeSnap` | A window dragged to the left or right edge of a screen docks there without Shift, like Windows snap. The top edge is left to Windows (it maximizes), and the bottom edge is the taskbar. Only with `fancyzones_shiftDrag` on. | `true` |
 | `fancyzones_dockEdgeSnapBand` | How close to that edge, in pixels, the cursor must be (1 to 100) | 12 |
 | `fancyzones_restoreSize` | A window that is undocked gets back the size it had before | `false` |
@@ -195,14 +218,17 @@ This was checked on this computer only: the release file, copied alone into an e
 
 ## Rebuild it
 
-Only the C++ part of PowerToys builds with Visual Studio 2022, and that is all the fork needs. Stop the fork first, because the executable is locked while it runs.
+Only the C++ part of PowerToys builds with Visual Studio 2022, and that is all the fork needs. The installed exe is locked while it runs, so stop the fork before copying the new build over it.
 
 ```powershell
 & "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" `
   C:\Users\carlo\Tools\FanciestZones\src\modules\fancyzones\FancyZones\FancyZones.vcxproj `
-  -p:Platform=x64 -p:Configuration=Debug "-p:SolutionDir=C:\Users\carlo\Tools\FanciestZones\\" -m
+  -p:Platform=x64 -p:Configuration=Release "-p:SolutionDir=C:\Users\carlo\Tools\FanciestZones\\" -m
+Stop-Process -Name FanciestZones -ErrorAction SilentlyContinue
+Copy-Item C:\Users\carlo\Tools\FanciestZones\x64\Release\FanciestZones.exe "$env:LOCALAPPDATA\FanciestZones\" -Force
+Start-Process "$env:LOCALAPPDATA\FanciestZones\FanciestZones.exe"
 ```
 
-The result is `x64\Debug\FanciestZones.exe`, which is what the startup shortcut on this computer runs. With `-p:Configuration=Release` the result is `x64\Release\FanciestZones.exe`, the one to copy to other computers: the debug file only runs where Visual Studio is installed.
+The build lands in `x64\Release`, which is disposable (about 15 GB of intermediates with a Debug build, so delete `x64` freely). The startup shortcut, the Start menu layout shortcuts and the user PATH all point at the installed copy in `%LOCALAPPDATA%\FanciestZones`, never at the build folder. Use `-p:Configuration=Debug` only for debugging: the debug exe only runs where Visual Studio is installed.
 
 `tools\dock-live-test\docktest.ps1 -Monitor 0` (or `-Monitor 1`) checks the whole feature with real test windows. It takes over the mouse and keyboard for about a minute. `-Only keys` (or `dock`, `resize`, `slots`, `monitors`, `close`, several separated by commas) runs only those sections, after docking two windows side by side; sections that build on earlier ones bring them along.

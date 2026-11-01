@@ -60,12 +60,19 @@ namespace Dock
         // (the top one maximizes, the bottom one is the taskbar).
         std::optional<Target> TargetFromPoint(const RECT& area, POINT pt, int gap, LONG edgeBand = 48, float windowEdgeShare = 0.3f, bool edgesOnly = false);
         void Insert(HWND window, const std::wstring& app, const Target& target);
+        // Where a new window goes without a drag, like Hyprland's dwindle layout: an empty slot if there is one, otherwise it splits
+        // the focused window along its longer side and takes the right or bottom half. Without a focused window it splits the largest one.
+        std::optional<Target> AutoTarget(const RECT& area, int gap, HWND focused);
         // Swaps the window with the leaf next to it on that side. False when there is none.
         bool Move(HWND window, const RECT& area, int gap, Edge direction);
         // The freed space goes to the neighbors
         bool Remove(HWND window);
         // Moves the splits bounding the window by the edges the user moved, from the rect the window had to the new one
         bool Resize(HWND window, const RECT& area, int gap, const RECT& fromRect, const RECT& toRect);
+        // Turns the split that holds the window from side by side to one above the other, or back. False when no split divides its space.
+        bool ToggleSplit(HWND window, const RECT& area, int gap);
+        // Moves the nearest split of that direction so that the window gets delta pixels more (less when negative). False when nothing moved.
+        bool Grow(HWND window, const RECT& area, int gap, bool sideBySide, LONG delta);
 
         std::vector<std::pair<HWND, RECT>> WindowRects(const RECT& area, int gap) const;
     };

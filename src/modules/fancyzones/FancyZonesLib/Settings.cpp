@@ -51,6 +51,7 @@ namespace NonLocalizable
     const wchar_t ExcludedAppsID[] = L"fancyzones_excluded_apps";
     const wchar_t ZoneHighlightOpacityID[] = L"fancyzones_highlight_opacity";
     const wchar_t DockCaptionButtonsID[] = L"fancyzones_dockCaptionButtons";
+    const wchar_t DockAutoTileID[] = L"fancyzones_dockAutoTile";
     const wchar_t DockEdgeSnapID[] = L"fancyzones_dockEdgeSnap";
     const wchar_t DockEdgeSnapBandID[] = L"fancyzones_dockEdgeSnapBand";
     const wchar_t DockGapID[] = L"fancyzones_dockGap";
@@ -200,6 +201,11 @@ void FancyZonesSettings::LoadSettings()
         if (auto val = values.get_bool_value(NonLocalizable::DockCaptionButtonsID))
         {
             m_settings.dockCaptionButtons = *val;
+        }
+
+        if (auto val = values.get_bool_value(NonLocalizable::DockAutoTileID))
+        {
+            m_settings.dockAutoTile = *val;
         }
 
         if (auto val = values.get_bool_value(NonLocalizable::DockEdgeSnapID))

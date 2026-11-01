@@ -363,6 +363,140 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(tree.TargetFromPoint(RECT{ 0, 0, 150, 800 }, { 10, 400 }, 0).has_value());
         }
 
+        TEST_METHOD (AutoDockOnEmptyWorkAreaTakesHalf)
+        {
+            Dock::Tree tree;
+            const auto target = tree.AutoTarget(m_area, 0, nullptr);
+            Assert::IsTrue(target.has_value());
+            tree.Insert(m_a, L"", target.value());
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
+        }
+
+        TEST_METHOD (AutoDockFillsAnEmptySlotFirst)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+
+            tree.Insert(m_b, L"", tree.AutoTarget(m_area, 0, m_a).value());
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, m_b));
+        }
+
+        TEST_METHOD (AutoDockSplitsTheFocusedWindowAlongItsLongerSide)
+        {
+            auto tree = SideBySide();
+
+            // a is taller than wide: the new window goes below it
+            tree.Insert(m_c, L"", tree.AutoTarget(m_area, 0, m_a).value());
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 400 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 0, 400, 500, 800 }, RectOf(tree, m_c));
+
+            // c is wider than tall: the next one goes to its right
+            const auto d = reinterpret_cast<HWND>(4);
+            tree.Insert(d, L"", tree.AutoTarget(m_area, 0, m_c).value());
+            CustomAssert::AreEqual(RECT{ 0, 400, 250, 800 }, RectOf(tree, m_c));
+            CustomAssert::AreEqual(RECT{ 250, 400, 500, 800 }, RectOf(tree, d));
+        }
+
+        TEST_METHOD (AutoDockWithoutFocusSplitsTheLargestWindow)
+        {
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 750, 700 }); // b and c share the right half, a is the largest
+
+            const auto target = tree.AutoTarget(m_area, 0, nullptr);
+            Assert::IsTrue(target.has_value());
+            Assert::IsTrue(target->node == tree.Find(m_a));
+        }
+
+        TEST_METHOD (AutoDockLeavesASlotKeptForAnApp)
+        {
+            auto tree = SideBySide();
+            auto leaf = tree.Find(m_b);
+            leaf->window = nullptr;
+            leaf->app = L"kept.exe";
+
+            const auto target = tree.AutoTarget(m_area, 0, m_a);
+            Assert::IsTrue(target.has_value());
+            Assert::IsFalse(target->fill);
+            Assert::IsTrue(target->node == tree.Find(m_a));
+        }
+
+        TEST_METHOD (AutoDockRefusesASplitThatLeavesTooLittle)
+        {
+            const RECT narrow{ 0, 0, 300, 150 };
+            Dock::Tree tree;
+            tree.Insert(m_a, L"", Dock::Target{ .node = nullptr, .edge = Dock::Edge::Left });
+            tree.Insert(m_b, L"", tree.AutoTarget(narrow, 0, m_a).value());
+            Assert::IsFalse(tree.AutoTarget(narrow, 0, m_a).has_value());
+        }
+
+        TEST_METHOD (ToggleSplitTurnsTheSplitAroundTheWindow)
+        {
+            auto tree = SideBySide();
+            Assert::IsTrue(tree.ToggleSplit(m_a, m_area, 0));
+            CustomAssert::AreEqual(RECT{ 0, 0, 1000, 400 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, RectOf(tree, m_b));
+
+            Assert::IsTrue(tree.ToggleSplit(m_b, m_area, 0));
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
+        }
+
+        TEST_METHOD (ToggleSplitSkipsASplitWhoseOtherSideIsHidden)
+        {
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 750, 700 }); // b above c on the right
+            tree.Find(m_c)->hidden = true;
+
+            Assert::IsTrue(tree.ToggleSplit(m_b, m_area, 0));
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, RectOf(tree, m_b));
+        }
+
+        TEST_METHOD (ToggleSplitOfAnUnknownWindowChangesNothing)
+        {
+            auto tree = SideBySide();
+            Assert::IsFalse(tree.ToggleSplit(m_c, m_area, 0));
+        }
+
+        TEST_METHOD (GrowMovesTheSplitTowardsTheNeighbor)
+        {
+            auto tree = SideBySide();
+            Assert::IsTrue(tree.Grow(m_a, m_area, 0, true, 100));
+            CustomAssert::AreEqual(RECT{ 0, 0, 600, 800 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 600, 0, 1000, 800 }, RectOf(tree, m_b));
+
+            // The window on the other side of the split gets its pixels the same way
+            Assert::IsTrue(tree.Grow(m_b, m_area, 0, true, 200));
+            CustomAssert::AreEqual(RECT{ 0, 0, 400, 800 }, RectOf(tree, m_a));
+
+            Assert::IsTrue(tree.Grow(m_a, m_area, 0, true, -100));
+            CustomAssert::AreEqual(RECT{ 0, 0, 300, 800 }, RectOf(tree, m_a));
+        }
+
+        TEST_METHOD (GrowFindsTheSplitOfThatDirection)
+        {
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 750, 700 }); // b above c on the right
+
+            Assert::IsTrue(tree.Grow(m_c, m_area, 0, true, 100));
+            CustomAssert::AreEqual(RECT{ 400, 400, 1000, 800 }, RectOf(tree, m_c));
+            Assert::IsTrue(tree.Grow(m_c, m_area, 0, false, 100));
+            CustomAssert::AreEqual(RECT{ 400, 300, 1000, 800 }, RectOf(tree, m_c));
+        }
+
+        TEST_METHOD (GrowWithoutASplitOfThatDirectionChangesNothing)
+        {
+            auto tree = SideBySide();
+            Assert::IsFalse(tree.Grow(m_a, m_area, 0, false, 100));
+        }
+
+        TEST_METHOD (GrowStopsAtTheSmallestRatio)
+        {
+            auto tree = SideBySide();
+            Assert::IsTrue(tree.Grow(m_a, m_area, 0, true, 5000));
+            CustomAssert::AreEqual(RECT{ 0, 0, 900, 800 }, RectOf(tree, m_a));
+            Assert::IsFalse(tree.Grow(m_a, m_area, 0, true, 100));
+        }
+
         TEST_METHOD (LayoutNamesThatCantBeShortcutsAreRefused)
         {
             Assert::IsTrue(DockCommands::IsValidName(L"DevLayout"));
