@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "FancyZonesLib\DesktopScroll.h"
 #include "FancyZonesLib\DockTree.h"
 #include "FancyZonesLib\FancyZonesData\DockLayouts.h"
 
@@ -11,6 +12,59 @@ namespace FancyZonesUnitTests
     TEST_CLASS (DockTreeUnitTests)
     {
     public:
+        TEST_METHOD (EachScrollPageHasItsOwnLayout)
+        {
+            auto& layouts = DockLayouts::instance();
+            FancyZonesDataTypes::WorkAreaId id{};
+            id.monitorId.deviceId.id = L"scroll-page-test";
+
+            auto& tree = layouts.Tree(id);
+            tree.root = std::make_unique<Dock::Node>();
+            tree.root->app = L"kept";
+
+            layouts.SwitchPage(id, 1);
+            Assert::IsNull(layouts.Tree(id).root.get());
+
+            layouts.SwitchPage(id, 0);
+            Assert::AreEqual(std::wstring(L"kept"), layouts.Tree(id).root->app);
+
+            layouts.SwitchPage(id, 2);
+            layouts.SwitchPagesHome();
+            Assert::AreEqual(std::wstring(L"kept"), layouts.Tree(id).root->app);
+            layouts.Tree(id).root.reset();
+        }
+
+        TEST_METHOD (DesktopScrollReachesTheEmptyPagePastTheLastWindow)
+        {
+            Assert::AreEqual(2160.0, DesktopScroll::ScrollLimit(0, 2160));
+            Assert::AreEqual(2160.0, DesktopScroll::ScrollLimit(2073, 2160));
+            Assert::AreEqual(4320.0, DesktopScroll::ScrollLimit(2500, 2160));
+        }
+
+        TEST_METHOD (DesktopScrollSixNotchesAreAScreen)
+        {
+            Assert::AreEqual(2160.0, 6 * DesktopScroll::WheelPixels(-WHEEL_DELTA, 2160), 0.001);
+            Assert::AreEqual(-360.0, DesktopScroll::WheelPixels(WHEEL_DELTA, 2160), 0.001);
+        }
+
+        TEST_METHOD (DesktopScrollStopsWhereTheWheelStopped)
+        {
+            Assert::AreEqual(1080.0, DesktopScroll::RestingOffset(1080.0, 2160.0));
+        }
+
+        TEST_METHOD (DesktopScrollRestsOnAPageWhenVeryClose)
+        {
+            Assert::AreEqual(2160.0, DesktopScroll::RestingOffset(2120.0, 2160.0));
+            Assert::AreEqual(0.0, DesktopScroll::RestingOffset(40.0, 2160.0));
+        }
+
+        TEST_METHOD (DesktopScrollWindowBelongsToThePageOfItsMiddle)
+        {
+            Assert::AreEqual(0L, DesktopScroll::PageOf(-8, 2089, 2160));
+            Assert::AreEqual(1L, DesktopScroll::PageOf(2180, 500, 2160));
+            Assert::AreEqual(1L, DesktopScroll::PageOf(1900, 1000, 2160));
+        }
+
         TEST_METHOD (EdgesOnlyDocksTheLeftAndRightEdgeNotTheOthers)
         {
             Dock::Tree tree;

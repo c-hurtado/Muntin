@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>html,body{margin:0;height:100%;overflow:hidden}#s{position:fixed;left:0;bottom:0;width:60px;height:60px;background:#fff}</style>
+<div id="s"></div>
+<script>
+// Solid colour so scroll-probe analyze.py can track the window edges. The title carries a frame
+// counter and visibility state, so the probe can see from outside when rendering stops.
+const q = new URLSearchParams(location.search)
+document.body.style.background = '#' + q.get('c')
+let f = 0
+function tick () {
+  f++
+  s.style.transform = `translateX(${(f * 4) % 400}px)`
+  document.title = `probe ${q.get('n')} ${document.visibilityState} ${f}`
+  requestAnimationFrame(tick)
+}
+tick()
+</script>

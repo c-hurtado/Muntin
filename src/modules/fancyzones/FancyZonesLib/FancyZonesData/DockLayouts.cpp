@@ -209,6 +209,11 @@ bool DockLayouts::RemoveWindow(HWND window)
         removed |= tree.Remove(window);
     }
 
+    for (auto& [_, tree] : m_pageTrees)
+    {
+        removed |= tree.Remove(window);
+    }
+
     if (removed)
     {
         SaveData();
@@ -279,10 +284,56 @@ std::map<std::wstring, Dock::Tree> DockLayouts::Named(const std::wstring& name) 
     return result;
 }
 
+void DockLayouts::SwitchPage(const FancyZonesDataTypes::WorkAreaId& id, int page)
+{
+    SwitchPage(id.toString(), page);
+}
+
+void DockLayouts::SwitchPage(const std::wstring& key, int page)
+{
+    const auto current = m_pages.find(key);
+    const int from = current != m_pages.end() ? current->second : 0;
+    if (from == page)
+    {
+        return;
+    }
+
+    m_pageTrees[{ key, from }] = std::move(m_trees[key]);
+    const auto next = m_pageTrees.find({ key, page });
+    m_trees[key] = next != m_pageTrees.end() ? std::move(next->second) : Dock::Tree{};
+    if (next != m_pageTrees.end())
+    {
+        m_pageTrees.erase(next);
+    }
+
+    m_pages[key] = page;
+    Refresh(m_trees[key]); // Minimizing and restoring don't reach the layouts of other pages
+}
+
+void DockLayouts::SwitchPagesHome()
+{
+    const auto pages = m_pages;
+    for (const auto& [key, _] : pages)
+    {
+        SwitchPage(key, 0);
+    }
+
+    m_pages.clear();
+    m_pageTrees.clear();
+}
+
 void DockLayouts::SaveData() const
 {
+    std::map<std::wstring, Dock::Tree> homeTrees;
+    for (const auto& [id, tree] : m_trees)
+    {
+        const auto page = m_pages.find(id);
+        const auto home = page != m_pages.end() && page->second != 0 ? m_pageTrees.find({ id, 0 }) : m_pageTrees.end();
+        homeTrees[id] = (home != m_pageTrees.end() ? home->second : tree).Clone();
+    }
+
     json::JsonObject root{};
-    root.SetNamedValue(NonLocalizable::DockLayoutsIds::WorkAreasID, JsonUtils::ToJson(m_trees, [](const std::wstring& id) { return id; }));
+    root.SetNamedValue(NonLocalizable::DockLayoutsIds::WorkAreasID, JsonUtils::ToJson(homeTrees, [](const std::wstring& id) { return id; }));
     root.SetNamedValue(NonLocalizable::DockLayoutsIds::SlotsID, JsonUtils::ToJson(m_slots, [](int key) { return std::to_wstring(key); }));
 
     json::JsonObject named{};

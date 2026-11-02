@@ -9,6 +9,7 @@
 #include <common/SettingsAPI/FileWatcher.h>
 #include <common/notifications/NotificationUtil.h>
 
+#include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/DockCaptionButtons.h>
 #include <FancyZonesLib/DraggingState.h>
 #include <FancyZonesLib/EditorParameters.h>
@@ -458,6 +459,7 @@ private:
     std::wstring m_dockLoadName; // Named dock layout to load on WM_PRIV_DOCK_LOAD, empty when none is pending
     std::map<std::wstring, ULONGLONG> m_dockLaunched; // Apps started by a named layout, and when
     std::unique_ptr<DockCaptionButtons::Overlays> m_captionButtons;
+    std::unique_ptr<DesktopScroll> m_desktopScroll;
     WorkAreaConfiguration m_workAreaConfiguration;
     DraggingState m_draggingState;
     bool m_monitorRotationPreviewActive = false;
@@ -525,6 +527,10 @@ FancyZones::Run() noexcept
     });
     SyncCaptionButtonsTimer();
 
+    m_desktopScroll = std::make_unique<DesktopScroll>(m_hinstance, [window = m_window](HMONITOR monitor, int page) {
+        PostMessageW(window, WM_PRIV_DESKTOP_SCROLL, reinterpret_cast<WPARAM>(monitor), page);
+    });
+
     if (!KeyboardInput::Initialize(m_window))
     {
         Logger::critical(L"Failed to register raw input device");
@@ -586,6 +592,8 @@ FancyZones::Destroy() noexcept
         KillTimer(m_window, CaptionButtonsTimerId);
     }
 
+    m_desktopScroll.reset();
+    DockLayouts::instance().SwitchPagesHome();
     m_captionButtons.reset();
     m_workAreaConfiguration.Clear();
     BufferedPaintUnInit();
@@ -1171,6 +1179,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         }
         else if (message == WM_PRIV_VD_SWITCH)
         {
+            m_desktopScroll->ReturnAll();
             OnDisplayChange(DisplayChangeType::VirtualDesktop);
         }
         else if (message == WM_PRIV_EDITOR)
@@ -1242,6 +1251,30 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             {
                 DockClaim(hwnd);
             }
+        }
+        else if (message == WM_PRIV_DESKTOP_SCROLL)
+        {
+            if (const auto monitor = reinterpret_cast<HMONITOR>(wparam))
+            {
+                if (auto workArea = m_workAreaConfiguration.GetWorkArea(monitor))
+                {
+                    DockLayouts::instance().SwitchPage(workArea->UniqueId(), static_cast<int>(lparam));
+                    workArea->ApplyDockLayout();
+                }
+            }
+            else
+            {
+                DockLayouts::instance().SwitchPagesHome();
+                for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+                {
+                    if (workArea)
+                    {
+                        workArea->ApplyDockLayout();
+                    }
+                }
+            }
+
+            UpdateCaptionButtons();
         }
         else if (message == WM_PRIV_DOCK_LOAD)
         {
@@ -1988,8 +2021,8 @@ void FancyZones::FlashZones() noexcept
 
 void FancyZones::DockClaim(HWND window) noexcept
 {
-    // Events come for every child window and control too
-    if (GetAncestor(window, GA_ROOT) != window)
+    // Events come for every child window and control too. A window on another scroll page isn't free to take a slot.
+    if (GetAncestor(window, GA_ROOT) != window || DesktopScroll::IsParked(window))
     {
         return;
     }

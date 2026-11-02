@@ -85,13 +85,21 @@ public:
     bool DeleteNamed(const std::wstring& name);
     std::map<std::wstring, Dock::Tree> Named(const std::wstring& name) const;
 
+    // Each scroll page of a work area has its own layout, kept only while FanciestZones runs. The saved layout is the one of page 0.
+    void SwitchPage(const FancyZonesDataTypes::WorkAreaId& id, int page);
+    void SwitchPagesHome();
+
     void SaveData() const;
 
 private:
     DockLayouts();
     ~DockLayouts() = default;
 
+    void SwitchPage(const std::wstring& key, int page);
+
     std::map<std::wstring, Dock::Tree> m_trees;
+    std::map<std::wstring, int> m_pages; // Current page of a work area, when it isn't 0
+    std::map<std::pair<std::wstring, int>, Dock::Tree> m_pageTrees; // Layouts of the pages that aren't the current one
     std::map<int, Dock::Tree> m_slots;
     std::map<std::wstring, std::map<std::wstring, Dock::Tree>, DockCommands::NameLess> m_named;
 };

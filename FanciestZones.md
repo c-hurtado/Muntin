@@ -74,6 +74,18 @@ With `fancyzones_dockAutoTile` on, a new window docks on the monitor it opens on
 
 A window stays floating when it opens maximized, can't be resized, belongs to another window (most dialogs), is in `fancyzones_excluded_apps`, or takes more than 5 seconds to appear. Only a newly created window docks: one that comes back from the tray or from another virtual desktop doesn't, and a window you undock stays undocked.
 
+### Scroll the desktop
+
+Hold **Shift+Win** and roll the mouse wheel to scroll the windows of the monitor under the cursor up and down a tall canvas. Six notches scroll one screen. The windows glide for a moment after the last notch, and a click stops them. They stay wherever the scroll stops, cut off by the edge of the monitor if need be, and they work normally there. You can scroll down to the first full page past the lowest window, which is an empty screen, and a new window opens where you are.
+
+- **Which windows scroll:** the ordinary windows on that monitor. Always-on-top, minimized and administrator windows stay where they are.
+- **A window out of sight:** Alt+Tab or a taskbar click scrolls to the page that holds it.
+- **Pages and docking:** every stretch of the canvas as tall as the monitor is a page with its own dock layout. A scroll that stops very close to a page rests exactly on it. The layout is in force while the monitor shows exactly that page. Between pages docked windows just scroll, and resizing one doesn't move its neighbors until the monitor is back on that page. Only the layout of the first page is saved. The layouts of other pages last until FanciestZones closes.
+- **Maximized windows:** cut off by the scroll, a window isn't maximized anymore but keeps its size. It is maximized again when it is back in its place.
+- **Back to the top:** a change of virtual desktop or of the monitor setup brings every window back to its place on the first page, and each page's windows pile up there. Closing FanciestZones does too, and after a crash the next start does.
+
+A window fully out of sight waits as a one pixel strip at the bottom of the monitor, under the taskbar. On a monitor without a taskbar that strip is visible. There is no scrolling on a monitor with another monitor right below it.
+
 ### Save and recall layouts
 
 | Keys | Action |

@@ -10,6 +10,7 @@
 #include "FancyZonesData/AppliedLayouts.h"
 #include "FancyZonesData/AppZoneHistory.h"
 #include "FancyZonesData/CustomLayouts.h"
+#include "DesktopScroll.h"
 #include "FancyZonesData/DockLayouts.h"
 #include "ZonesOverlay.h"
 #include "Settings.h"
@@ -570,7 +571,7 @@ void WorkArea::ApplyDockLayout()
     for (const auto leaf : tree.Leaves())
     {
         const bool settled = leaf->placedAt != 0 && now - leaf->placedAt > PlacementSettleMillis;
-        if (!leaf->window || leaf->hidden || !settled)
+        if (!leaf->window || leaf->hidden || !settled || DesktopScroll::IsParked(leaf->window))
         {
             continue;
         }
@@ -597,7 +598,7 @@ void WorkArea::ApplyDockLayout()
         }
 
         // Moving a maximized window would restore it. A place squeezed to nothing by the gaps is no place.
-        if (FancyZonesWindowUtils::IsWindowMaximized(window) || rect.right <= rect.left || rect.bottom <= rect.top)
+        if (FancyZonesWindowUtils::IsWindowMaximized(window) || rect.right <= rect.left || rect.bottom <= rect.top || DesktopScroll::IsParked(window))
         {
             continue;
         }
