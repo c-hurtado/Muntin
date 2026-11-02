@@ -87,6 +87,7 @@ public:
 
     // Each scroll page of a work area has its own layout, kept only while FanciestZones runs. The saved layout is the one of page 0.
     void SwitchPage(const FancyZonesDataTypes::WorkAreaId& id, int page);
+    int Page(const FancyZonesDataTypes::WorkAreaId& id) const;
     void SwitchPagesHome();
 
     void SaveData() const;

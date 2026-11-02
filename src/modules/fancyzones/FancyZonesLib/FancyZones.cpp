@@ -10,6 +10,7 @@
 #include <common/notifications/NotificationUtil.h>
 
 #include <FancyZonesLib/DesktopScroll.h>
+#include <FancyZonesLib/DockMotion.h>
 #include <FancyZonesLib/DockCaptionButtons.h>
 #include <FancyZonesLib/DraggingState.h>
 #include <FancyZonesLib/EditorParameters.h>
@@ -435,6 +436,8 @@ private:
     void DockNewWindows() noexcept;
     bool DockAuto(HWND window) noexcept;
     void DockMoveWindow(HWND window, Dock::Edge edge) noexcept;
+    bool DockMoveInLayout(HWND window, Dock::Edge edge) noexcept; // False: up or down, and nowhere to go on this page
+    void DockMoveToPage(HWND window, Dock::Edge edge) noexcept;
     bool CanDockMove(HWND window) const noexcept;
     void UpdateCaptionButtons() noexcept;
     void SyncCaptionButtonsTimer() noexcept;
@@ -460,6 +463,9 @@ private:
     std::map<std::wstring, ULONGLONG> m_dockLaunched; // Apps started by a named layout, and when
     std::unique_ptr<DockCaptionButtons::Overlays> m_captionButtons;
     std::unique_ptr<DesktopScroll> m_desktopScroll;
+    std::unique_ptr<DockMotion> m_dockMotion;
+    HWND m_dockCarried{}; // Docked, on its way to another page, where it docks on the same side
+    Dock::Edge m_dockCarriedSide{};
     WorkAreaConfiguration m_workAreaConfiguration;
     DraggingState m_draggingState;
     bool m_monitorRotationPreviewActive = false;
@@ -527,6 +533,7 @@ FancyZones::Run() noexcept
     });
     SyncCaptionButtonsTimer();
 
+    m_dockMotion = std::make_unique<DockMotion>(m_hinstance);
     m_desktopScroll = std::make_unique<DesktopScroll>(m_hinstance, [window = m_window](HMONITOR monitor, int page) {
         PostMessageW(window, WM_PRIV_DESKTOP_SCROLL, reinterpret_cast<WPARAM>(monitor), page);
     });
@@ -592,6 +599,7 @@ FancyZones::Destroy() noexcept
         KillTimer(m_window, CaptionButtonsTimerId);
     }
 
+    m_dockMotion.reset();
     m_desktopScroll.reset();
     DockLayouts::instance().SwitchPagesHome();
     m_captionButtons.reset();
@@ -1259,11 +1267,21 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 if (auto workArea = m_workAreaConfiguration.GetWorkArea(monitor))
                 {
                     DockLayouts::instance().SwitchPage(workArea->UniqueId(), static_cast<int>(lparam));
-                    workArea->ApplyDockLayout();
+                    if (const auto landed = m_desktopScroll->TakeLandedWindow(); landed && landed == m_dockCarried)
+                    {
+                        DockLayouts::instance().RemoveWindow(landed); // The page it left closes the gap when it is back
+                        workArea->DockOnSide(landed, m_dockCarriedSide);
+                        m_dockCarried = nullptr;
+                    }
+                    else
+                    {
+                        workArea->ApplyDockLayout();
+                    }
                 }
             }
             else
             {
+                m_dockCarried = nullptr;
                 DockLayouts::instance().SwitchPagesHome();
                 for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
                 {
@@ -2212,6 +2230,68 @@ void FancyZones::DockMoveWindow(HWND window, Dock::Edge edge) noexcept
         return;
     }
 
+    bool moved = false;
+    const bool sideways = edge == Dock::Edge::Left || edge == Dock::Edge::Right;
+    if (FancyZonesSettings::settings().dockAnimation && m_dockMotion && (sideways || IsDocked(window)))
+    {
+        std::vector<HWND> windows{ window };
+        for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+        {
+            for (const auto leaf : workArea ? workArea->DockTree().Leaves() : std::vector<Dock::Node*>{})
+            {
+                windows.push_back(leaf->window);
+            }
+        }
+
+        m_dockMotion->Hold(windows);
+        moved = DockMoveInLayout(window, edge);
+        m_dockMotion->Release(moved);
+    }
+    else
+    {
+        moved = DockMoveInLayout(window, edge);
+    }
+
+    if (!moved)
+    {
+        DockMoveToPage(window, edge);
+    }
+}
+
+void FancyZones::DockMoveToPage(HWND window, Dock::Edge edge) noexcept
+{
+    const auto monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    const auto workArea = m_workAreaConfiguration.GetWorkArea(monitor);
+    const bool down = edge == Dock::Edge::Bottom;
+    if (!workArea || !m_desktopScroll)
+    {
+        return;
+    }
+
+    const bool docked = workArea->DockTree().Find(window) != nullptr;
+    if (!down && DockLayouts::instance().Page(workArea->UniqueId()) == 0)
+    {
+        // No page above: a floating window docks at the top as it did
+        if (!docked)
+        {
+            workArea->DockAtEdge(window, edge);
+        }
+
+        return;
+    }
+
+    m_dockCarried = docked ? window : nullptr;
+    if (docked)
+    {
+        m_dockCarriedSide = workArea->DockSide(window);
+    }
+
+    m_desktopScroll->CarryToPage(monitor, window, down ? 1 : -1);
+}
+
+bool FancyZones::DockMoveInLayout(HWND window, Dock::Edge edge) noexcept
+{
+    const bool sideways = edge == Dock::Edge::Left || edge == Dock::Edge::Right;
     const auto& workAreas = m_workAreaConfiguration.GetAllWorkAreas();
 
     WorkArea* current = nullptr;
@@ -2225,6 +2305,11 @@ void FancyZones::DockMoveWindow(HWND window, Dock::Edge edge) noexcept
 
     if (!current)
     {
+        if (!sideways)
+        {
+            return false;
+        }
+
         // Not docked yet: dock it on that side of its monitor
         if (const auto workArea = m_workAreaConfiguration.GetWorkAreaFromWindow(window))
         {
@@ -2236,12 +2321,12 @@ void FancyZones::DockMoveWindow(HWND window, Dock::Edge edge) noexcept
             workArea->DockAtEdge(window, edge);
         }
 
-        return;
+        return true;
     }
 
     if (current->DockMove(window, edge))
     {
-        return;
+        return true;
     }
 
     // No neighbor on that side: go on to the monitor on that side, entering it by the edge the window comes from
@@ -2257,7 +2342,6 @@ void FancyZones::DockMoveWindow(HWND window, Dock::Edge edge) noexcept
         }
 
         const RECT to = toRect(workArea->GetWorkAreaRect());
-        const bool sideways = edge == Dock::Edge::Left || edge == Dock::Edge::Right;
         const LONG distance = edge == Dock::Edge::Left ? from.left - to.right : edge == Dock::Edge::Right ? to.left - from.right : edge == Dock::Edge::Top ? from.top - to.bottom : to.top - from.bottom;
         const LONG overlap = sideways ? (std::min)(from.bottom, to.bottom) - (std::max)(from.top, to.top) : (std::min)(from.right, to.right) - (std::max)(from.left, to.left);
         if (distance >= 0 && overlap > 0 && (!next || distance < nearest))
@@ -2272,7 +2356,10 @@ void FancyZones::DockMoveWindow(HWND window, Dock::Edge edge) noexcept
         const auto opposite = edge == Dock::Edge::Left ? Dock::Edge::Right : edge == Dock::Edge::Right ? Dock::Edge::Left : edge == Dock::Edge::Top ? Dock::Edge::Bottom : Dock::Edge::Top;
         current->UndockWindow(window);
         next->DockAtEdge(window, opposite);
+        return true;
     }
+
+    return sideways;
 }
 
 bool FancyZones::IsDocked(HWND window) const noexcept

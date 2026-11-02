@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "FancyZonesLib\DesktopScroll.h"
+#include "FancyZonesLib\DockMotion.h"
 #include "FancyZonesLib\DockTree.h"
 #include "FancyZonesLib\FancyZonesData\DockLayouts.h"
 
@@ -39,6 +40,58 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(2160.0, DesktopScroll::ScrollLimit(0, 2160));
             Assert::AreEqual(2160.0, DesktopScroll::ScrollLimit(2073, 2160));
             Assert::AreEqual(4320.0, DesktopScroll::ScrollLimit(2500, 2160));
+        }
+
+        TEST_METHOD (DesktopScrollOverviewIsTheRealPlaceAtFullSize)
+        {
+            Assert::AreEqual(300.0, DesktopScroll::OverviewY(300, 0, 1000, 0, 1.0), 0.001);
+            Assert::AreEqual(300.0, DesktopScroll::OverviewY(1300, 1000, 1000, 1, 1.0), 0.001);
+        }
+
+        TEST_METHOD (DesktopScrollOverviewStacksThePagesWithAGap)
+        {
+            Assert::AreEqual(250.0, DesktopScroll::OverviewY(0, 0, 1000, 0, DesktopScroll::OverviewZoom), 0.001);
+            Assert::AreEqual(850.0, DesktopScroll::OverviewY(1000, 0, 1000, 1, DesktopScroll::OverviewZoom), 0.001);
+        }
+
+        TEST_METHOD (DesktopScrollWindowDockedBetweenPagesGoesToThePage)
+        {
+            Assert::AreEqual(1600L, DesktopScroll::IntoPage(2050, 400, 1, 1000));
+            Assert::AreEqual(1000L, DesktopScroll::IntoPage(700, 400, 1, 1000));
+            Assert::AreEqual(1200L, DesktopScroll::IntoPage(1200, 400, 1, 1000));
+            Assert::AreEqual(1000L, DesktopScroll::IntoPage(1900, 1500, 1, 1000));
+        }
+
+        TEST_METHOD (SideOfKeepsTheSideOfTheWindow)
+        {
+            const RECT area{ 0, 0, 1000, 800 };
+            Assert::IsTrue(Dock::SideOf({ 500, 0, 1000, 800 }, area) == Dock::Edge::Right);
+            Assert::IsTrue(Dock::SideOf({ 500, 400, 1000, 800 }, area) == Dock::Edge::Right);
+            Assert::IsTrue(Dock::SideOf({ 0, 0, 500, 800 }, area) == Dock::Edge::Left);
+            Assert::IsTrue(Dock::SideOf({ 0, 0, 1000, 400 }, area) == Dock::Edge::Top);
+            Assert::IsTrue(Dock::SideOf({ 0, 400, 1000, 800 }, area) == Dock::Edge::Bottom);
+        }
+
+        TEST_METHOD (DockMotionStartsFromRest)
+        {
+            double displacement = -1000;
+            double velocity = 0;
+            DockMotion::Advance(displacement, velocity, 1.0 / 60);
+            Assert::IsTrue(displacement < -850 && displacement > -970);
+            Assert::IsTrue(velocity > 0);
+        }
+
+        TEST_METHOD (DockMotionComesToRest)
+        {
+            double displacement = -1000;
+            double velocity = 0;
+            for (int frame = 0; frame < 60; ++frame)
+            {
+                DockMotion::Advance(displacement, velocity, 1.0 / 60);
+            }
+
+            Assert::AreEqual(0.0, displacement, 0.5);
+            Assert::AreEqual(0.0, velocity, 5.0);
         }
 
         TEST_METHOD (DesktopScrollSixNotchesAreAScreen)

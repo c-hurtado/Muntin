@@ -66,6 +66,8 @@ struct Settings
     int zoneHighlightOpacity = 50;
     bool dockCaptionButtons = true; // < > buttons next to the caption buttons of the docked windows
     bool dockAutoTile = false; // New windows dock by themselves, splitting the focused docked window
+    bool dockAnimation = true; // Windows moved with Shift+Win+arrows spring to their new places
+    bool desktopScrollOverview = false; // Scrolling the desktop zooms out to the pages, and ends on a page
     bool dockEdgeSnap = true; // A window dragged to the left or right edge docks there without Shift, like Windows snap
     int dockEdgeSnapBand = 12; // Pixels from that edge within which it docks
     int dockGap = 8; // Pixels left between docked windows

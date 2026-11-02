@@ -2,6 +2,7 @@
 #include "DesktopScroll.h"
 
 #include <algorithm>
+#include <atomic>
 #include <fstream>
 #include <future>
 #include <map>
@@ -18,21 +19,32 @@
 #include <common/utils/elevation.h>
 
 #include <FancyZonesLib/ModuleConstants.h>
+#include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/WindowUtils.h>
 
 namespace
 {
     constexpr wchar_t WindowClassName[] = L"FanciestZonesDesktopScroll";
+    constexpr wchar_t BorderClassName[] = L"FanciestZonesDesktopScrollBorder";
 
     constexpr UINT WM_SCROLL_WHEEL = WM_APP + 1; // wparam: wheel delta, lparam: cursor
     constexpr UINT WM_SCROLL_FOLLOW = WM_APP + 2; // wparam: the window that became the foreground window
     constexpr UINT WM_SCROLL_RETURN_ALL = WM_APP + 3;
     constexpr UINT WM_SCROLL_STOP = WM_APP + 4;
+    constexpr UINT WM_SCROLL_CARRY_DOWN = WM_APP + 6; // wparam: the monitor, lparam: the window
+    constexpr UINT WM_SCROLL_CARRY_UP = WM_APP + 7;
+    constexpr UINT WM_SCROLL_REST_ON_PAGE = WM_APP + 5; // wparam: the monitor, lparam: the window that docked
 
     constexpr ULONGLONG SettleMillis = 300; // The wheel stopped: the real windows take over from the thumbnails
     constexpr double EasePerFrame = 0.3; // Going to the page of a window
     constexpr double GlidePerFrame = 0.1; // Under the wheel: the windows keep gliding after the last notch
+    constexpr double ZoomPerFrame = 0.2;
     constexpr double ArrivedPixels = 1.0;
+    constexpr double ArrivedZoom = 0.002;
+    constexpr LONG BorderPixels = 2;
+    constexpr double BorderMargin = 16; // Between the border and the windows, with the overview fully open
+    constexpr double BorderOpacity = 51; // Of 255, with the overview fully open
+    constexpr LONG BorderRadius = 24;
     constexpr ULONGLONG LandMillis = 150; // A window that doesn't respond by then arrives when it can
     constexpr BYTE MaskKey = 0xE8; // Unassigned. A key between Win down and Win up stops Win from opening Start.
 
@@ -63,6 +75,8 @@ namespace
     {
         HTHUMBNAIL id{};
         const Entry* entry{};
+        RECT drawn{}; // DWM is only told what changed: each update is a call into it
+        bool inSight{};
     };
 
     // Read by the main thread, which must not move these windows
@@ -72,6 +86,15 @@ namespace
     std::wstring ParkedFileName()
     {
         return PTSettingsHelper::get_module_save_folder_location(NonLocalizable::ModuleKey) + L"\\desktop-scroll.txt";
+    }
+
+    // The accent color of the Windows theme
+    COLORREF AccentColor() noexcept
+    {
+        DWORD color{};
+        DWORD size = sizeof(color);
+        const auto result = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\DWM", L"AccentColor", RRF_RT_REG_DWORD, nullptr, &color, &size);
+        return result == ERROR_SUCCESS ? color & 0xFFFFFF : RGB(255, 255, 255);
     }
 
     bool IsDown(int key) noexcept
@@ -161,6 +184,11 @@ namespace
     {
         constexpr LONG_PTR skippedStyles = WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
 
+        if (!IsWindowVisible(window))
+        {
+            return false;
+        }
+
         DWORD process{};
         GetWindowThreadProcessId(window, &process);
         int cloaked{};
@@ -170,7 +198,7 @@ namespace
         wchar_t title[2]{};
         wchar_t className[32]{};
         GetClassNameW(window, className, ARRAYSIZE(className));
-        return process != GetCurrentProcessId() && IsWindowVisible(window) && !IsIconic(window) && !cloaked &&
+        return process != GetCurrentProcessId() && !IsIconic(window) && !cloaked &&
                (GetWindowLongPtrW(window, GWL_EXSTYLE) & skippedStyles) == 0 &&
                InternalGetWindowText(window, title, ARRAYSIZE(title)) > 0 &&
                wcscmp(className, L"Progman") != 0 && wcscmp(className, L"WorkerW") != 0 &&
@@ -205,7 +233,14 @@ struct DesktopScroll::Impl
     bool scrolling{};
     bool returnPending{};
     bool settleNow{};
+    bool steering{}; // The wheel drives this scroll: others have a destination
     HWND followed{}; // The scroll goes to the page of this window, which came to the foreground
+    HWND pendingFollow{}; // Came to the foreground during a scroll: the next one goes there
+    HWND docked{}; // Goes to the page the scroll rests on, instead of staying where it was dropped
+    HWND carried{}; // Stays where it is on the monitor while the pages scroll past
+    std::atomic<HWND> landedRider{}; // Reached its page, for the page change to pick up
+    HMONITOR pendingRest{}; // Asked for during a scroll
+    HWND pendingRestWindow{};
     HMONITOR scrolledMonitor{};
     double target{};
     ULONGLONG lastWheel{};
@@ -221,6 +256,14 @@ struct DesktopScroll::Impl
         wcex.hInstance = instance;
         wcex.lpszClassName = WindowClassName;
         RegisterClassExW(&wcex);
+
+        WNDCLASSEXW borderClass{};
+        borderClass.cbSize = sizeof(WNDCLASSEX);
+        borderClass.lpfnWndProc = DefWindowProcW;
+        borderClass.hInstance = instance;
+        borderClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
+        borderClass.lpszClassName = BorderClassName;
+        RegisterClassExW(&borderClass);
 
         // Top level and never shown: it receives WM_DISPLAYCHANGE
         window = CreateWindowExW(WS_EX_TOOLWINDOW, WindowClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
@@ -291,6 +334,13 @@ struct DesktopScroll::Impl
         case WM_SCROLL_FOLLOW:
             self->Follow(reinterpret_cast<HWND>(wparam));
             return 0;
+        case WM_SCROLL_CARRY_DOWN:
+        case WM_SCROLL_CARRY_UP:
+            self->Carry(reinterpret_cast<HMONITOR>(wparam), reinterpret_cast<HWND>(lparam), message == WM_SCROLL_CARRY_DOWN ? 1 : -1);
+            return 0;
+        case WM_SCROLL_REST_ON_PAGE:
+            self->RestOnPage(reinterpret_cast<HMONITOR>(wparam), reinterpret_cast<HWND>(lparam));
+            return 0;
         case WM_DISPLAYCHANGE:
         case WM_SCROLL_RETURN_ALL:
             self->RequestReturnAll();
@@ -323,7 +373,7 @@ struct DesktopScroll::Impl
         const double pixels = DesktopScroll::WheelPixels(delta, info.rcMonitor.bottom - info.rcMonitor.top);
         if (scrolling)
         {
-            if (!followed && monitor == scrolledMonitor)
+            if (steering && monitor == scrolledMonitor)
             {
                 target += pixels;
             }
@@ -338,6 +388,11 @@ struct DesktopScroll::Impl
     {
         if (scrolling)
         {
+            if (!followed)
+            {
+                pendingFollow = foreground;
+            }
+
             return;
         }
 
@@ -355,6 +410,42 @@ struct DesktopScroll::Impl
                 followed = nullptr;
                 return;
             }
+        }
+    }
+
+    void Carry(HMONITOR monitor, HWND rider, int pages) noexcept
+    {
+        MONITORINFO info{ .cbSize = sizeof(MONITORINFO) };
+        if (scrolling || !GetMonitorInfoW(monitor, &info))
+        {
+            return;
+        }
+
+        const double height = static_cast<double>(info.rcMonitor.bottom) - info.rcMonitor.top;
+        const auto found = screens.find(monitor);
+        const double page = std::round((found != screens.end() ? found->second.offset : 0.0) / height) + pages;
+        if (page >= 0)
+        {
+            carried = rider;
+            Scroll(monitor, page * height, 0);
+        }
+    }
+
+    void RestOnPage(HMONITOR monitor, HWND dockedWindow) noexcept
+    {
+        if (scrolling)
+        {
+            pendingRest = monitor;
+            pendingRestWindow = dockedWindow;
+            return;
+        }
+
+        const auto found = screens.find(monitor);
+        if (found != screens.end() && std::fmod(found->second.offset, found->second.height) != 0)
+        {
+            const auto& screen = found->second;
+            docked = dockedWindow;
+            Scroll(monitor, std::round(screen.offset / screen.height) * screen.height, 0);
         }
     }
 
@@ -495,16 +586,31 @@ struct DesktopScroll::Impl
 
         scrolling = true;
         settleNow = false;
+        steering = !destination;
         scrolledMonitor = monitor;
         Collect(screen, monitor, info);
+        const HWND seated = std::exchange(docked, nullptr);
+        const HWND riding = std::exchange(carried, nullptr);
+        if (destination)
+        {
+            const auto dropped = std::find_if(screen.entries.begin(), screen.entries.end(), [&](const Entry& entry) { return entry.window == seated; });
+            if (dropped != screen.entries.end())
+            {
+                const LONG page = std::lround(*destination / screen.height);
+                dropped->canvasTop = screen.top + DesktopScroll::IntoPage(dropped->canvasTop - screen.top, dropped->height, page, screen.height);
+            }
+        }
 
         LONG lowest = 0;
         for (const auto& entry : screen.entries)
         {
-            lowest = (std::max)(lowest, entry.canvasTop + entry.height - screen.top);
+            if (entry.window != riding) // It doesn't make the canvas longer: carrying a window on ends at the first empty page
+            {
+                lowest = (std::max)(lowest, entry.canvasTop + entry.height - screen.top);
+            }
         }
 
-        const double limit = (std::max)(DesktopScroll::ScrollLimit(lowest, screen.height), screen.offset);
+        const double limit = (std::max)(DesktopScroll::ScrollLimit(lowest, screen.height), std::ceil(screen.offset / screen.height) * screen.height);
         const auto clampTarget = [&] { target = std::clamp(target, 0.0, limit); };
         target = destination ? *destination : screen.offset + pixels;
         clampTarget();
@@ -516,6 +622,13 @@ struct DesktopScroll::Impl
             return;
         }
 
+        const auto rider = std::find_if(screen.entries.begin(), screen.entries.end(), [&](const Entry& entry) { return entry.window == riding; });
+        if (destination && rider != screen.entries.end())
+        {
+            rider->canvasTop += std::lround(target - screen.offset);
+            landedRider = riding;
+        }
+
         const auto& work = info.rcWork;
         const HWND overlay = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, WindowClassName, L"", WS_POPUP, work.left, work.top, work.right - work.left, work.bottom - work.top, nullptr, nullptr, instance, nullptr);
         std::vector<Thumbnail> thumbnails;
@@ -524,27 +637,85 @@ struct DesktopScroll::Impl
             for (const auto& entry : screen.entries)
             {
                 HTHUMBNAIL id{};
-                if (SUCCEEDED(DwmRegisterThumbnail(overlay, entry.window, &id)))
+                if (!IsIconic(entry.window) && SUCCEEDED(DwmRegisterThumbnail(overlay, entry.window, &id)))
                 {
                     thumbnails.push_back({ id, &entry });
                 }
             }
         }
 
-        const auto draw = [&](double offset) {
-            for (const auto& thumbnail : thumbnails)
+        // The overview stays open while the keys are down, and always ends on a page
+        const bool overview = !destination && overlay && FancyZonesSettings::settings().desktopScrollOverview;
+        // Its own window, as the overlay can't draw anything but thumbnails. Painted whole once: from then on its region shows the border.
+        const HWND border = overview ? CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, BorderClassName, L"", WS_POPUP, work.left, work.top, work.right - work.left, work.bottom - work.top, nullptr, nullptr, instance, nullptr) : nullptr;
+        if (border)
+        {
+            // The class keeps a brush of the color of the theme as it was at the last scroll
+            const auto brush = reinterpret_cast<LONG_PTR>(CreateSolidBrush(AccentColor()));
+            DeleteObject(reinterpret_cast<HGDIOBJ>(SetClassLongPtrW(border, GCLP_HBRBACKGROUND, brush)));
+            SetLayeredWindowAttributes(border, 0, 0, LWA_ALPHA);
+            ShowWindow(border, SW_SHOWNOACTIVATE);
+            UpdateWindow(border);
+        }
+
+        RECT borderDrawn{};
+        BYTE borderOpacityDrawn{};
+        const double middle = (static_cast<double>(info.rcMonitor.left) + info.rcMonitor.right) / 2;
+        const double monitorWidth = static_cast<double>(info.rcMonitor.right) - info.rcMonitor.left;
+        const auto draw = [&](double offset, double zoom) {
+            for (auto& thumbnail : thumbnails)
             {
                 const auto& entry = *thumbnail.entry;
-                const LONG top = entry.canvasTop - std::lround(offset) - work.top;
-                const LONG left = entry.left - work.left;
-                DWM_THUMBNAIL_PROPERTIES properties{ .dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE, .opacity = 255, .fVisible = TRUE };
-                properties.rcDestination = { left, top, left + entry.width, top + entry.height };
+                const LONG canvasY = entry.canvasTop - screen.top;
+                const double page = DesktopScroll::PageOf(canvasY, entry.height, screen.height);
+                const LONG top = std::lround(screen.top + DesktopScroll::OverviewY(canvasY, entry.window == riding ? target : offset, screen.height, page, zoom)) - work.top;
+                const LONG left = std::lround(middle + (entry.left - middle) * zoom) - work.left;
+                const RECT place{ left, top, left + std::lround(entry.width * zoom), top + std::lround(entry.height * zoom) };
+                if (EqualRect(&place, &thumbnail.drawn))
+                {
+                    continue;
+                }
+
+                thumbnail.drawn = place;
+                const bool inSight = place.bottom > 0 && place.top < work.bottom - work.top && place.right > 0 && place.left < work.right - work.left;
+                if (!inSight && !thumbnail.inSight)
+                {
+                    continue;
+                }
+
+                thumbnail.inSight = inSight;
+                DWM_THUMBNAIL_PROPERTIES properties{ .dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE, .opacity = 255, .fVisible = inSight };
+                properties.rcDestination = place;
                 DwmUpdateThumbnailProperties(thumbnail.id, &properties);
+            }
+
+            const double opened = std::clamp((1.0 - zoom) / (1.0 - DesktopScroll::OverviewZoom), 0.0, 1.0);
+            const LONG margin = std::lround(BorderMargin * opened);
+            const LONG pageLeft = std::lround(middle + (info.rcMonitor.left - middle) * zoom) - work.left;
+            const LONG left = pageLeft - margin;
+            const LONG right = pageLeft + std::lround(monitorWidth * zoom) + margin;
+            const double lastPage = std::round(limit / screen.height);
+            const LONG top = std::lround(screen.top + DesktopScroll::OverviewY(0, offset, screen.height, 0, zoom)) - work.top - margin;
+            const LONG bottom = std::lround(screen.top + DesktopScroll::OverviewY((lastPage + 1) * screen.height, offset, screen.height, lastPage, zoom)) - work.top + margin;
+            const RECT borderPlace{ left, top, right, bottom };
+            const auto borderOpacity = static_cast<BYTE>(std::lround(BorderOpacity * opened));
+            if (border && (!EqualRect(&borderPlace, &borderDrawn) || borderOpacity != borderOpacityDrawn))
+            {
+                borderDrawn = borderPlace;
+                borderOpacityDrawn = borderOpacity;
+                const HRGN ring = CreateRoundRectRgn(left, top, right + 1, bottom + 1, BorderRadius * 2, BorderRadius * 2);
+                const HRGN inside = CreateRoundRectRgn(left + BorderPixels, top + BorderPixels, right - BorderPixels + 1, bottom - BorderPixels + 1, (BorderRadius - BorderPixels) * 2, (BorderRadius - BorderPixels) * 2);
+                CombineRgn(ring, ring, inside, RGN_DIFF);
+                DeleteObject(inside);
+                SetWindowRgn(border, ring, FALSE); // The window owns it now
+                SetLayeredWindowAttributes(border, 0, borderOpacity, LWA_ALPHA);
+                SetWindowPos(border, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
         };
 
         double position = screen.offset;
-        draw(position);
+        double zoom = 1.0;
+        draw(position, zoom);
         DwmFlush();
         if (overlay)
         {
@@ -565,6 +736,11 @@ struct DesktopScroll::Impl
             Hide(entry, info.rcMonitor);
         }
 
+        const auto restingOffset = [&](double offset) {
+            const double resting = overview ? std::round(offset / screen.height) * screen.height : DesktopScroll::RestingOffset(offset, screen.height);
+            return std::clamp(resting, 0.0, limit);
+        };
+
         bool settling = destination.has_value() || !overlay;
         bool quit = false;
         while (!quit)
@@ -576,7 +752,8 @@ struct DesktopScroll::Impl
             }
 
             clampTarget();
-            if (settling && !destination && !settleNow && GetTickCount64() - lastWheel < SettleMillis)
+            const bool wheeling = overview ? (IsDown(VK_LWIN) || IsDown(VK_RWIN)) && IsDown(VK_SHIFT) : GetTickCount64() - lastWheel < SettleMillis;
+            if (settling && !destination && !settleNow && wheeling)
             {
                 settling = false; // The wheel moved again on its way to rest
             }
@@ -586,31 +763,38 @@ struct DesktopScroll::Impl
                 // A click stops the glide: only the real windows can take the next one
                 if (!destination)
                 {
-                    target = std::clamp(DesktopScroll::RestingOffset(position, screen.height), 0.0, limit);
+                    target = restingOffset(position);
                 }
 
                 position = target;
+                zoom = 1.0;
                 settling = true;
             }
-            else if (!settling && GetTickCount64() - lastWheel >= SettleMillis)
+            else if (!settling && !wheeling)
             {
-                target = std::clamp(DesktopScroll::RestingOffset(target, screen.height), 0.0, limit);
+                target = restingOffset(target);
                 settling = true;
             }
 
-            position += (target - position) * (destination ? EasePerFrame : GlidePerFrame);
-            if (settling && std::abs(target - position) < ArrivedPixels)
+            position += (target - position) * (destination || (overview && settling) ? EasePerFrame : GlidePerFrame);
+            if (overview)
+            {
+                zoom += ((settling ? 1.0 : DesktopScroll::OverviewZoom) - zoom) * ZoomPerFrame;
+            }
+
+            if (settling && std::abs(target - position) < ArrivedPixels && std::abs(1.0 - zoom) < ArrivedZoom)
             {
                 position = target;
-                draw(position);
+                draw(position, 1.0);
                 DwmFlush();
                 break;
             }
 
-            draw(position);
+            draw(position, zoom);
             DwmFlush();
         }
 
+        const HWND foregroundBefore = GetForegroundWindow();
         const double previousOffset = screen.offset;
         screen.offset = std::round(quit ? position : target);
         const LONG offset = std::lround(screen.offset);
@@ -642,12 +826,28 @@ struct DesktopScroll::Impl
             DwmUnregisterThumbnail(thumbnail.id);
         }
 
+        if (border)
+        {
+            DestroyWindow(border);
+        }
+
         if (overlay)
         {
             DestroyWindow(overlay);
         }
 
-        Refocus(screen, monitor, shown);
+        // Maximizing a window that lands activates it
+        const auto wasForeground = std::find_if(screen.entries.begin(), screen.entries.end(), [&](const Entry& entry) { return entry.window == foregroundBefore; });
+        if (!followed && !pendingFollow && GetForegroundWindow() != foregroundBefore && IsWindow(foregroundBefore) && (wasForeground == screen.entries.end() || !wasForeground->parked))
+        {
+            FancyZonesWindowUtils::SwitchToWindow(foregroundBefore);
+        }
+
+        if (!pendingFollow)
+        {
+            Refocus(screen, monitor, shown);
+        }
+
         const int page = static_cast<int>(std::lround(screen.offset / screen.height));
         const bool wasOnPage = previousOffset == std::floor(previousOffset / screen.height) * screen.height;
         const bool onPage = screen.offset == page * static_cast<double>(screen.height);
@@ -662,6 +862,15 @@ struct DesktopScroll::Impl
         }
 
         FinishReturn();
+        if (const auto next = std::exchange(pendingFollow, nullptr))
+        {
+            Follow(next);
+        }
+
+        if (const auto rest = std::exchange(pendingRest, nullptr))
+        {
+            RestOnPage(rest, pendingRestWindow);
+        }
     }
 
     // The focus can't stay on a window that went out of sight
@@ -739,7 +948,7 @@ struct DesktopScroll::Impl
                 // A window the user took elsewhere since the last scroll isn't the scroll's to bring back
                 RECT rect{};
                 const bool whereLeft = GetWindowRect(entry.window, &rect) && rect.top == entry.canvasTop - offset && rect.left == entry.left;
-                if (entry.parked || (offset != 0 && (whereLeft || IsIconic(entry.window))))
+                if (entry.parked || rect.top == entry.parkedTop || (offset != 0 && (whereLeft || IsIconic(entry.window))))
                 {
                     Return(entry, screen);
                 }
@@ -785,7 +994,7 @@ struct DesktopScroll::Impl
                 DeleteFileW(tempFileName.c_str());
                 DeleteFileW(fileName.c_str());
             }
-            else if (file.fail() || !MoveFileExW(tempFileName.c_str(), fileName.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            else if (file.fail() || !MoveFileExW(tempFileName.c_str(), fileName.c_str(), MOVEFILE_REPLACE_EXISTING))
             {
                 Logger::error(L"Saving the parked windows failed");
             }
@@ -833,6 +1042,27 @@ bool DesktopScroll::IsParked(HWND window) noexcept
 {
     std::lock_guard lock(parkedLock);
     return parkedWindows.contains(window);
+}
+
+HWND DesktopScroll::TakeLandedWindow() noexcept
+{
+    return m_impl->landedRider.exchange(nullptr);
+}
+
+void DesktopScroll::CarryToPage(HMONITOR monitor, HWND window, int pages) noexcept
+{
+    if (m_impl->window)
+    {
+        PostMessageW(m_impl->window, pages > 0 ? WM_SCROLL_CARRY_DOWN : WM_SCROLL_CARRY_UP, reinterpret_cast<WPARAM>(monitor), reinterpret_cast<LPARAM>(window));
+    }
+}
+
+void DesktopScroll::RestOnPage(HMONITOR monitor, HWND window) noexcept
+{
+    if (Impl::self)
+    {
+        PostMessageW(Impl::self->window, WM_SCROLL_REST_ON_PAGE, reinterpret_cast<WPARAM>(monitor), reinterpret_cast<LPARAM>(window));
+    }
 }
 
 DesktopScroll::DesktopScroll(HINSTANCE instance, PageChanged pageChanged) :

@@ -284,6 +284,12 @@ std::map<std::wstring, Dock::Tree> DockLayouts::Named(const std::wstring& name) 
     return result;
 }
 
+int DockLayouts::Page(const FancyZonesDataTypes::WorkAreaId& id) const
+{
+    const auto page = m_pages.find(id.toString());
+    return page != m_pages.end() ? page->second : 0;
+}
+
 void DockLayouts::SwitchPage(const FancyZonesDataTypes::WorkAreaId& id, int page)
 {
     SwitchPage(id.toString(), page);

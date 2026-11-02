@@ -81,6 +81,8 @@ public:
     bool DockResized(HWND window, const RECT& fromScreenRect);
     bool DockSetHidden(HWND window, bool hidden);
     // Gives the window the empty slot kept for its app, if there is one
+    Dock::Edge DockSide(HWND window); // The side of the work area the docked window sits on
+    void DockOnSide(HWND window, Dock::Edge side); // In the empty slot if there is one
     bool DockClaim(HWND window);
     void DockRecall(Dock::Tree tree);
     void ApplyDockLayout();

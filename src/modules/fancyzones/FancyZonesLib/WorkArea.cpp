@@ -394,6 +394,11 @@ bool WorkArea::DockWindow(HWND window, POINT pt, bool edgesOnly)
         DockLayouts::instance().SaveData();
     }
 
+    if (target)
+    {
+        DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
+    }
+
     return target.has_value();
 }
 
@@ -402,6 +407,33 @@ void WorkArea::DockAtEdge(HWND window, Dock::Edge edge)
     auto& tree = DockTree();
     tree.Remove(window);
     tree.Insert(window, get_process_path(window), Dock::Target{ .node = nullptr, .edge = edge });
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+    DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
+}
+
+Dock::Edge WorkArea::DockSide(HWND window)
+{
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    for (const auto& [docked, rect] : DockTree().WindowRects(area, DockGap()))
+    {
+        if (docked == window)
+        {
+            return Dock::SideOf(rect, area);
+        }
+    }
+
+    return Dock::Edge::Left;
+}
+
+void WorkArea::DockOnSide(HWND window, Dock::Edge side)
+{
+    auto& tree = DockTree();
+    tree.Remove(window);
+
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const auto slot = tree.AutoTarget(area, DockGap(), nullptr);
+    tree.Insert(window, get_process_path(window), slot && slot->fill ? slot.value() : Dock::Target{ .node = nullptr, .edge = side });
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
 }
@@ -419,6 +451,7 @@ bool WorkArea::DockAuto(HWND window, HWND focused)
     tree.Insert(window, get_process_path(window), target.value());
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
+    DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
     return true;
 }
 
@@ -432,6 +465,7 @@ bool WorkArea::DockToggleSplit(HWND window)
 
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
+    DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
     return true;
 }
 
@@ -444,6 +478,7 @@ bool WorkArea::DockGrow(HWND window, bool sideBySide, LONG delta)
     }
 
     ApplyDockLayout();
+    DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
     return true;
 }
 
@@ -457,6 +492,7 @@ bool WorkArea::DockMove(HWND window, Dock::Edge direction)
 
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
+    DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
     return true;
 }
 
@@ -552,6 +588,7 @@ void WorkArea::DockRecall(Dock::Tree tree)
     DockTree() = std::move(tree);
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
+    DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, nullptr);
 }
 
 void WorkArea::ApplyDockLayout()

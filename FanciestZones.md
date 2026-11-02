@@ -46,9 +46,11 @@ Shift+Win+arrows move the window:
 
 | Window | Shift+Win+arrow does |
 |---|---|
-| Floating | Docks it on that side of its monitor |
+| Floating, Left or Right | Docks it on that side of its monitor |
+| Floating, Up or Down | Carries it to the page above or below, where it stays floating. On the first page Up docks it at the top. |
 | Docked, with a neighbor on that side | Swaps the two. Also moves it into an empty half. |
 | Docked, with nothing on that side | Moves it to the monitor on that side, docked on the edge it came in from |
+| Docked, Up or Down, with nothing on that side and no monitor there | Scrolls to the page above or below and takes the window along, docked on the same side, or in the empty half if the page has one. It stops at the first empty page. |
 
 They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
 
@@ -78,9 +80,10 @@ A window stays floating when it opens maximized, can't be resized, belongs to an
 
 Hold **Shift+Win** and roll the mouse wheel to scroll the windows of the monitor under the cursor up and down a tall canvas. Six notches scroll one screen. The windows glide for a moment after the last notch, and a click stops them. They stay wherever the scroll stops, cut off by the edge of the monitor if need be, and they work normally there. You can scroll down to the first full page past the lowest window, which is an empty screen, and a new window opens where you are.
 
+- **Overview:** with `fancyzones_desktopScrollOverview` on, the scroll zooms out to half size, so you see the pages stacked with a gap between them. A thin rounded border in the Windows accent color fades in as it zooms out and marks the whole canvas, from the first page to the last. Keep Shift+Win down and roll the wheel to move through them. Let go and it zooms back in on the nearest page. A window can't be picked or dragged in the overview, and the pages are not drawn with a wallpaper of their own.
 - **Which windows scroll:** the ordinary windows on that monitor. Always-on-top, minimized and administrator windows stay where they are.
 - **A window out of sight:** Alt+Tab or a taskbar click scrolls to the page that holds it.
-- **Pages and docking:** every stretch of the canvas as tall as the monitor is a page with its own dock layout. A scroll that stops very close to a page rests exactly on it. The layout is in force while the monitor shows exactly that page. Between pages docked windows just scroll, and resizing one doesn't move its neighbors until the monitor is back on that page. Only the layout of the first page is saved. The layouts of other pages last until FanciestZones closes.
+- **Pages and docking:** every stretch of the canvas as tall as the monitor is a page with its own dock layout. A scroll that stops very close to a page rests exactly on it. The layout is in force while the monitor shows exactly that page. Docking a window or using a dock key between two pages scrolls to the nearest page first. Otherwise docked windows just scroll between pages, and resizing one doesn't move its neighbors until the monitor is back on that page. Only the layout of the first page is saved. The layouts of other pages last until FanciestZones closes or every window comes back to the first page.
 - **Maximized windows:** cut off by the scroll, a window isn't maximized anymore but keeps its size. It is maximized again when it is back in its place.
 - **Back to the top:** a change of virtual desktop or of the monitor setup brings every window back to its place on the first page, and each page's windows pile up there. Closing FanciestZones does too, and after a crash the next start does.
 
@@ -165,6 +168,8 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_excluded_apps` | Apps that are never docked: one name or path fragment per line (`\r` or `\n` between entries in the JSON string) | empty |
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
 | `fancyzones_dockAutoTile` | New windows dock by themselves (see "Dock new windows by themselves") | `false` |
+| `fancyzones_dockAnimation` | Windows moved with Shift+Win+arrows or the < > buttons spring to their new places | `true` |
+| `fancyzones_desktopScrollOverview` | Scrolling the desktop zooms out to the pages (see "Scroll the desktop") | `false` |
 | `fancyzones_dockEdgeSnap` | A window dragged to the left or right edge of a screen docks there without Shift, like Windows snap. The top edge is left to Windows (it maximizes), and the bottom edge is the taskbar. Only with `fancyzones_shiftDrag` on. | `true` |
 | `fancyzones_dockEdgeSnapBand` | How close to that edge, in pixels, the cursor must be (1 to 100) | 12 |
 | `fancyzones_restoreSize` | A window that is undocked gets back the size it had before | `false` |

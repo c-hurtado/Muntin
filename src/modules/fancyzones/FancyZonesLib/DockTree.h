@@ -76,4 +76,19 @@ namespace Dock
 
         std::vector<std::pair<HWND, RECT>> WindowRects(const RECT& area, int gap) const;
     };
+
+    // The side of the area that a docked window sits on: left or right, unless it spans nearly the whole width
+    inline Edge SideOf(const RECT& rect, const RECT& area) noexcept
+    {
+        constexpr double spansArea = 0.9;
+
+        const double width = static_cast<double>(rect.right) - rect.left;
+        const double areaWidth = static_cast<double>(area.right) - area.left;
+        if (width < spansArea * areaWidth)
+        {
+            return rect.left + rect.right < area.left + area.right ? Edge::Left : Edge::Right;
+        }
+
+        return rect.top + rect.bottom < area.top + area.bottom ? Edge::Top : Edge::Bottom;
+    }
 }

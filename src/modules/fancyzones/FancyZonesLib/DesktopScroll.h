@@ -24,8 +24,25 @@ public:
     // Brings every window back to its place on the first page, and every monitor to the top of its canvas
     void ReturnAll() noexcept;
 
+    // Scrolls to the next page (pages 1) or the one before (pages -1), with the window staying where it is on the monitor
+    void CarryToPage(HMONITOR monitor, HWND window, int pages) noexcept;
+
+    // The window that the last page change carried, if any, once
+    HWND TakeLandedWindow() noexcept;
+
     // The scroll holds the window: nothing else may move it
     static bool IsParked(HWND window) noexcept;
+
+    // A layout only works on a whole page: docking between two pages scrolls to the nearest one, which
+    // puts the layout in force. window: the window that docked, if any, which goes along to that page.
+    static void RestOnPage(HMONITOR monitor, HWND window) noexcept;
+
+    // Top of a window moved just far enough to lie on the page
+    static constexpr LONG IntoPage(LONG canvasTop, LONG windowHeight, LONG page, LONG pageHeight) noexcept
+    {
+        const LONG pageTop = page * pageHeight;
+        return (std::max)(pageTop, (std::min)(canvasTop, pageTop + pageHeight - windowHeight));
+    }
 
     // How far a turn of the wheel scrolls. Positive: down the canvas.
     static constexpr double WheelPixels(int delta, LONG pageHeight) noexcept
@@ -33,6 +50,18 @@ public:
         constexpr double pagesPerNotch = 1.0 / 6;
 
         return -delta / static_cast<double>(WHEEL_DELTA) * pagesPerNotch * pageHeight;
+    }
+
+    static constexpr double OverviewZoom = 0.5;
+
+    // Height on the monitor of a point of the canvas, with the pages zoomed around the middle of the monitor
+    // and apart by a gap that opens up with the zoom. At zoom 1 it is simply where the point is.
+    static constexpr double OverviewY(double canvasY, double offset, double pageHeight, double page, double zoom) noexcept
+    {
+        constexpr double gapOfPage = 0.1;
+
+        const double gap = gapOfPage * pageHeight * (1.0 - zoom) / (1.0 - OverviewZoom);
+        return pageHeight / 2 + zoom * (canvasY - pageHeight / 2 - offset) + gap * (page - offset / pageHeight);
     }
 
     // Where a scroll comes to rest: where it stopped, or on a page when that is very close
