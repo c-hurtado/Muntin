@@ -1,0 +1,23 @@
+name: Idea
+description: Suggest a feature or a change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The task or situation, in your own words
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How FanciestZones could help with it
+    validations:
+      required: true
+  - type: textarea
+    id: elsewhere
+    attributes:
+      label: Seen elsewhere
+      description: Optional. Another window manager that does this, with a link

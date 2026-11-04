@@ -6,9 +6,13 @@
 #include "winres.h"
 #undef APSTUDIO_READONLY_SYMBOLS
 
+// FanciestZones' own version, not the PowerToys one from version.h. Raise it for each release and tag it vX.Y.Z.
+#define FANCIESTZONES_VERSION 0, 1, 0, 0
+#define FANCIESTZONES_VERSION_STRING "0.1.0.0"
+
 1 VERSIONINFO
- FILEVERSION FILE_VERSION
- PRODUCTVERSION PRODUCT_VERSION
+ FILEVERSION FANCIESTZONES_VERSION
+ PRODUCTVERSION FANCIESTZONES_VERSION
  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 #ifdef _DEBUG
  FILEFLAGS VS_FF_DEBUG
@@ -25,12 +29,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "FanciestZones contributors"
             VALUE "FileDescription", FILE_DESCRIPTION
-            VALUE "FileVersion", FILE_VERSION_STRING
+            VALUE "FileVersion", FANCIESTZONES_VERSION_STRING
             VALUE "InternalName", INTERNAL_NAME
             VALUE "LegalCopyright", "Copyright (C) Microsoft Corporation and FanciestZones contributors. MIT License."
             VALUE "OriginalFilename", ORIGINAL_FILENAME
             VALUE "ProductName", "FanciestZones"
-            VALUE "ProductVersion", PRODUCT_VERSION_STRING
+            VALUE "ProductVersion", FANCIESTZONES_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"

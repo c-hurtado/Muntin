@@ -16,22 +16,23 @@ This is the plan for presenting FanciestZones on GitHub for free, so that other 
 | Repository files | New `README.md` with the promo GIF; `SECURITY.md`, `SUPPORT.md`, `DATA_AND_PRIVACY.md`, `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` rewritten for FanciestZones, so that nobody reports FanciestZones problems to Microsoft |
 | Icon | New FanciestZones icon in the exe and the tray |
 
-## Before you make it public
+## Done for the first release (0.1.0)
 
-1. **Commit and push.** Nothing above is committed.
-2. **Release builds.** Add a GitHub Actions workflow that builds `FancyZones.vcxproj` in Release on a `windows-2022` runner and attaches `FanciestZones.exe`, `LICENSE` and `NOTICE.md` to a GitHub Release. The MIT license requires the copyright notices to travel with the binary, so always ship `LICENSE` and `NOTICE.md` beside the exe (a zip is simplest). GitHub Actions and Releases are free for public repositories.
-3. **Remove the PowerToys automation.** `.github/workflows` holds 10 PowerToys workflows (issue triage, Store submissions, spelling) and `.github/ISSUE_TEMPLATE` holds PowerToys issue forms. Forks have Actions turned off until you enable them, so they do no harm yet, but they will fail once Actions is on, and the issue forms ask about PowerToys. Replace them with one bug form and one idea form.
-4. **A version of its own.** The exe reports the PowerToys version it was forked from (`src/common/version/version.h`). Give FanciestZones its own number, for example 1.0.0, in the FanciestZones resource file, and tag releases with it.
-5. **Repository page.** Set the description, the topics (`windows`, `window-manager`, `tiling-window-manager`, `fancyzones`), the website link, and a social preview image (a still from the promo).
-6. **Keep personal tooling out.** `tools/promo/capture.ps1` refers to a private tool and a path on this computer. Leave `tools/promo` out of the repository, or remove those lines before committing it.
+- Committed and pushed; `dock-by-drag` is the default branch on GitHub.
+- PowerToys automation removed from `.github`; one bug form and one idea form; issues turned on.
+- Own version, set in `FancyZonesLib\fancyzones.base.rc` (`FANCIESTZONES_VERSION`). Raise it for each release and tag it `vX.Y.Z`.
+- Repository description and topics set. `doc/fanciestzones/social-preview.png` is the social preview; upload it in Settings > General > Social preview (GitHub has no API for it).
+- Installer (`installer\FanciestZones.iss`) run end to end once, silently, over a running copy: it quit the copy, installed, registered the uninstaller, and started the new copy.
+- `tools/promo` stays out of the repository: it refers to a private tool and a path on this computer.
 
-## Soon after
+## Next
 
-1. **Installer.** `installer\FanciestZones.iss` (Inno Setup, free) installs per user to `%LOCALAPPDATA%\FanciestZones` without administrator rights: the exe, `LICENSE` and `NOTICE.md`, a Start menu entry and an optional sign-in shortcut. It asks a running copy to quit on upgrade and uninstall, and keeps settings and layouts. Build it with `ISCC.exe installer\FanciestZones.iss` after the Release exe; it writes `x64\Release\installer\FanciestZones-<version>-setup.exe`. Not yet run end to end. Build it in the release workflow, and sign both the exe and the setup.
-2. **Code signing.** Unsigned downloads get a SmartScreen warning. [SignPath Foundation](https://signpath.org) signs open-source projects for free; Azure Trusted Signing costs about 10 USD a month.
-3. **winget.** After a signed release, add a manifest to `microsoft/winget-pkgs` so that `winget install FanciestZones` works.
-4. **A smaller repository.** A GitHub fork stays tied to PowerToys: issues are off by default, code search skips it, and a clone downloads all of PowerToys. Either ask GitHub Support to detach the fork, or move to a new repository that holds only `src/modules/fancyzones`, the parts of `src/common` it links, and the build files. The second also makes CI faster.
-5. **Name check.** FancyZones is a Microsoft product name. FanciestZones plays on it and says clearly that it isn't Microsoft's, which is common for forks, but if Microsoft ever asks, rename it.
+1. **Release workflow.** A GitHub Actions workflow that builds `FancyZones.vcxproj` in Release on a `windows-2022` runner, builds the installer, and attaches the setup and a zip of `FanciestZones.exe`, `LICENSE` and `NOTICE.md` to a GitHub Release. The MIT license requires the copyright notices to travel with the binary. Releases are built by hand until then.
+2. **PowerToys branches and tags.** The fork still carries about 770 PowerToys branches and 160 PowerToys tags. Delete them, keeping `dock-by-drag` and `main`.
+3. **Code signing.** Unsigned downloads get a SmartScreen warning. [SignPath Foundation](https://signpath.org) signs open-source projects for free; Azure Trusted Signing costs about 10 USD a month.
+4. **winget.** After a signed release, add a manifest to `microsoft/winget-pkgs` so that `winget install FanciestZones` works.
+5. **A smaller repository.** A GitHub fork stays tied to PowerToys: issues are off by default, code search skips it, and a clone downloads all of PowerToys. Either ask GitHub Support to detach the fork, or move to a new repository that holds only `src/modules/fancyzones`, the parts of `src/common` it links, and the build files. The second also makes CI faster.
+6. **Name check.** The MIT license covers the code, not names. Microsoft's [trademark guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks) say not to use its product names in the name of your own product, registered or not, including by "combining Microsoft's Brand Assets with other terms, misspellings". FanciestZones is close to FancyZones, so it is the one open risk. The README's "not affiliated" note covers the separate rule against implying endorsement, and saying in text that it is based on FancyZones is allowed. If Microsoft ever asks, rename it; a name of its own before the first wide announcement avoids the question.
 
 ## Quality fixes
 

@@ -30,16 +30,17 @@ It is one small program that runs on its own. You don't need PowerToys.
 
 ## Install
 
-1. Download `FanciestZones.exe` from the [latest release](https://github.com/c-hurtado/FanciestZones/releases/latest).
-2. Put it in a folder of your own, for example `%LOCALAPPDATA%\FanciestZones`.
-3. Run it. The FanciestZones icon appears in the notification area.
-4. Right-click the icon and choose **Start at sign-in** if you want it to start with Windows.
+1. Download `FanciestZones-<version>-setup.exe` from the [latest release](https://github.com/c-hurtado/FanciestZones/releases/latest).
+2. Run it. It installs for your user only and doesn't ask for administrator rights. Tick **Start FanciestZones when I sign in** if you want it to start with Windows.
+3. The FanciestZones icon appears in the notification area. Right-click it for settings.
 
-The file isn't signed yet. Windows SmartScreen may warn before the first run: choose **More info**, then **Run anyway**.
+The files aren't signed yet. Windows SmartScreen may warn before the first run: choose **More info**, then **Run anyway**.
 
 If PowerToys is installed, turn FancyZones off in PowerToys Settings. FanciestZones won't start while FancyZones of PowerToys runs, because both would move the same windows.
 
-To update, quit FanciestZones from its icon, replace the file, and run it again. To uninstall, quit it, turn off **Start at sign-in** first if it's on, and delete the file and the `%LOCALAPPDATA%\FanciestZones` folder.
+To update, run the newer setup; it quits the running copy first. To uninstall, use **Settings > Apps > Installed apps**. Your settings and layouts stay in `%LOCALAPPDATA%\FanciestZones`; delete that folder too to remove everything.
+
+Without the installer: the release also has a zip with `FanciestZones.exe`. Put it in `%LOCALAPPDATA%\FanciestZones` and run it; **Start at sign-in** is in the tray menu.
 
 ## Get started
 
