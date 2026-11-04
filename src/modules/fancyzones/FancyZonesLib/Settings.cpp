@@ -11,64 +11,6 @@
 #include <FancyZonesLib/SettingsObserver.h>
 #include <FancyZonesLib/trace.h>
 
-// Non-Localizable strings
-namespace NonLocalizable
-{
-    // FancyZones settings descriptions are localized, but underlying toggle (spinner, color picker) names are not.
-    const wchar_t ShiftDragID[] = L"fancyzones_shiftDrag";
-    const wchar_t MouseSwitchID[] = L"fancyzones_mouseSwitch";
-    const wchar_t MouseMiddleClickSpanningMultipleZonesID[] = L"fancyzones_mouseMiddleClickSpanningMultipleZones";
-    const wchar_t MouseWheelLayoutSwitchID[] = L"fancyzones_mouseWheelLayoutSwitch";
-    const wchar_t OverrideSnapHotKeysID[] = L"fancyzones_overrideSnapHotkeys";
-    const wchar_t MoveWindowAcrossMonitorsID[] = L"fancyzones_moveWindowAcrossMonitors";
-    const wchar_t MoveWindowsBasedOnPositionID[] = L"fancyzones_moveWindowsBasedOnPosition";
-    const wchar_t OverlappingZonesAlgorithmID[] = L"fancyzones_overlappingZonesAlgorithm";
-    const wchar_t DisplayOrWorkAreaChangeMoveWindowsID[] = L"fancyzones_displayOrWorkAreaChange_moveWindows";
-    const wchar_t ZoneSetChangeMoveWindowsID[] = L"fancyzones_zoneSetChange_moveWindows";
-    const wchar_t AppLastZoneMoveWindowsID[] = L"fancyzones_appLastZone_moveWindows";
-    const wchar_t OpenWindowOnActiveMonitorID[] = L"fancyzones_openWindowOnActiveMonitor";
-    const wchar_t RestoreSizeID[] = L"fancyzones_restoreSize";
-    const wchar_t QuickLayoutSwitch[] = L"fancyzones_quickLayoutSwitch";
-    const wchar_t FlashZonesOnQuickSwitch[] = L"fancyzones_flashZonesOnQuickSwitch";
-    const wchar_t UseCursorPosEditorStartupScreenID[] = L"use_cursorpos_editor_startupscreen";
-    const wchar_t ShowOnAllMonitorsID[] = L"fancyzones_show_on_all_monitors";
-    const wchar_t SpanZonesAcrossMonitorsID[] = L"fancyzones_span_zones_across_monitors";
-    const wchar_t MakeDraggedWindowTransparentID[] = L"fancyzones_makeDraggedWindowTransparent";
-    const wchar_t AllowChildWindowSnapID[] = L"fancyzones_allowChildWindowSnap";
-    const wchar_t DisableRoundCornersOnSnapping[] = L"fancyzones_disableRoundCornersOnSnap";
-
-    const wchar_t SystemThemeID[] = L"fancyzones_systemTheme";
-    const wchar_t ZoneColorID[] = L"fancyzones_zoneColor";
-    const wchar_t ZoneBorderColorID[] = L"fancyzones_zoneBorderColor";
-    const wchar_t ZoneHighlightColorID[] = L"fancyzones_zoneHighlightColor";
-    const wchar_t ZoneNumberColorID[] = L"fancyzones_zoneNumberColor";
-    const wchar_t EditorHotkeyID[] = L"fancyzones_editor_hotkey";
-    const wchar_t WindowSwitchingToggleID[] = L"fancyzones_windowSwitching";
-    const wchar_t NextTabHotkeyID[] = L"fancyzones_nextTab_hotkey";
-    const wchar_t PrevTabHotkeyID[] = L"fancyzones_prevTab_hotkey";
-    const wchar_t MonitorRotationID[] = L"fancyzones_monitorRotation";
-    const wchar_t MonitorRotationHotkeyID[] = L"fancyzones_monitorRotation_hotkey";
-    const wchar_t ExcludedAppsID[] = L"fancyzones_excluded_apps";
-    const wchar_t ZoneHighlightOpacityID[] = L"fancyzones_highlight_opacity";
-    const wchar_t DockCaptionButtonsID[] = L"fancyzones_dockCaptionButtons";
-    const wchar_t DockAutoTileID[] = L"fancyzones_dockAutoTile";
-    const wchar_t DesktopScrollOverviewID[] = L"fancyzones_desktopScrollOverview";
-    const wchar_t DockAnimationID[] = L"fancyzones_dockAnimation";
-    const wchar_t DockEdgeSnapID[] = L"fancyzones_dockEdgeSnap";
-    const wchar_t DockEdgeSnapBandID[] = L"fancyzones_dockEdgeSnapBand";
-    const wchar_t DockGapID[] = L"fancyzones_dockGap";
-    const wchar_t DockEdgeBandID[] = L"fancyzones_dockEdgeBand";
-    const wchar_t DockWindowEdgePercentID[] = L"fancyzones_dockWindowEdgePercent";
-    const wchar_t ShowZoneNumberID[] = L"fancyzones_showZoneNumber";
-    const wchar_t LayoutNameLabelEnabledID[] = L"fancyzones_layoutNameLabelEnabled";
-    const wchar_t LayoutNameLabelPlacementID[] = L"fancyzones_layoutNameLabelPlacement";
-    const wchar_t LayoutNameLabelTextColorID[] = L"fancyzones_layoutNameLabelTextColor";
-    const wchar_t LayoutNameLabelBackgroundColorID[] = L"fancyzones_layoutNameLabelBackgroundColor";
-    const wchar_t LayoutNameLabelFontSizeID[] = L"fancyzones_layoutNameLabelFontSize";
-    const wchar_t LayoutNameLabelPaddingID[] = L"fancyzones_layoutNameLabelPadding";
-    const wchar_t LayoutNameLabelDurationID[] = L"fancyzones_layoutNameLabelDuration";
-}
-
 FancyZonesSettings::FancyZonesSettings()
 {
     const std::wstring& settingsFileName = GetSettingsFileName();
@@ -213,6 +155,11 @@ void FancyZonesSettings::LoadSettings()
         if (auto val = values.get_bool_value(NonLocalizable::DesktopScrollOverviewID))
         {
             m_settings.desktopScrollOverview = *val;
+        }
+
+        if (auto val = values.get_int_value(NonLocalizable::DesktopScrollPagesID))
+        {
+            m_settings.desktopScrollPages = *val > 0 ? (std::min)(*val, MaxDesktopScrollPages) : MaxDesktopScrollPages; // 0 meant no limit before
         }
 
         if (auto val = values.get_bool_value(NonLocalizable::DockAnimationID))
@@ -398,6 +345,38 @@ void FancyZonesSettings::LoadSettings()
                    GET_RESOURCE_STRING(IDS_POWERTOYS_FANCYZONES).c_str(),
                    MB_OK);
     }
+}
+
+bool FancyZonesSettings::SaveValue(const wchar_t* id, const json::JsonValue& value, const std::wstring& file)
+{
+    // A file that can't be read, say after a typo while editing it by hand, isn't replaced: the other settings would be lost
+    auto read = json::from_file(file);
+    if (!read && GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES)
+    {
+        Logger::error(L"{} can't be read, {} isn't saved", file, id);
+        return false;
+    }
+
+    auto settings = read.value_or(json::JsonObject{});
+    if (!settings.HasKey(L"properties"))
+    {
+        settings.SetNamedValue(L"properties", json::JsonObject{});
+    }
+    else if (!json::has(settings, L"properties", json::JsonValueType::Object))
+    {
+        Logger::error(L"{} has no list of properties, {} isn't saved", file, id);
+        return false;
+    }
+
+    json::JsonObject property;
+    property.SetNamedValue(L"value", value);
+    settings.GetNamedObject(L"properties").SetNamedValue(id, property);
+    settings.SetNamedValue(L"name", json::value(NonLocalizable::ModuleKey));
+    settings.SetNamedValue(L"version", json::value(L"1.0"));
+
+    // The file watcher reloads the settings
+    json::to_file(file, settings);
+    return true;
 }
 
 void FancyZonesSettings::NotifyObservers(SettingId id) const

@@ -7,7 +7,6 @@
 #include <common/utils/EventWaiter.h>
 #include <common/utils/winapi_error.h>
 #include <common/SettingsAPI/FileWatcher.h>
-#include <common/notifications/NotificationUtil.h>
 
 #include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/DockMotion.h>
@@ -477,10 +476,6 @@ private:
 
     OnThreadExecutor m_dpiUnawareThread;
 
-    EventWaiter m_toggleEditorEventWaiter;
-
-    std::unique_ptr<notifications::NotificationUtil> m_notificationUtil;
-
     // If non-recoverable error occurs, trigger disabling of entire FancyZones.
     static std::function<void()> disableModuleCallback;
 
@@ -522,6 +517,9 @@ FancyZones::Run() noexcept
         return;
     }
 
+    // "FanciestZones.exe load <name>" from a shortcut works when this instance runs as administrator too. The handler checks its input.
+    ChangeWindowMessageFilterEx(m_window, WM_COPYDATA, MSGFLT_ALLOW, nullptr);
+
     m_captionButtons = std::make_unique<DockCaptionButtons::Overlays>(m_hinstance, [this](HWND window, Dock::Edge edge) {
         // A window that can't be moved isn't brought to the front for nothing
         if (CanDockMove(window))
@@ -544,7 +542,7 @@ FancyZones::Run() noexcept
         return;
     }
 
-    UpdateHotkey(static_cast<int>(HotkeyId::Editor), FancyZonesSettings::settings().editorHotkey, true);
+    // The zone editor hotkey isn't registered: there is no zone editor, and the key would be taken from other apps
     UpdateHotkey(static_cast<int>(HotkeyId::PrevTab), FancyZonesSettings::settings().prevTabHotkey, FancyZonesSettings::settings().windowSwitching);
     UpdateHotkey(static_cast<int>(HotkeyId::NextTab), FancyZonesSettings::settings().nextTabHotkey, FancyZonesSettings::settings().windowSwitching);
 
@@ -569,16 +567,6 @@ FancyZones::Run() noexcept
                           SetThreadDpiHostingBehavior(DPI_HOSTING_BEHAVIOR_MIXED);
                       } })
         .wait();
-
-    m_toggleEditorEventWaiter.start(CommonSharedConstants::FANCY_ZONES_EDITOR_TOGGLE_EVENT, [&](DWORD err) {
-        if (err == ERROR_SUCCESS)
-        {
-            Logger::trace(L"{} event was signaled", CommonSharedConstants::FANCY_ZONES_EDITOR_TOGGLE_EVENT);
-            PostMessage(m_window, WM_HOTKEY, 1, 0);
-        }
-    });
-
-    m_notificationUtil = std::make_unique<notifications::NotificationUtil>();
 
     SyncVirtualDesktops();
 
@@ -611,8 +599,6 @@ FancyZones::Destroy() noexcept
         m_window = nullptr;
     }
 
-    m_notificationUtil.reset();
-
     CoUninitialize();
 }
 
@@ -628,7 +614,7 @@ FancyZones::VirtualDesktopChanged() noexcept
 void FancyZones::MoveSizeStart(HWND window, HMONITOR monitor)
 {
     m_resizedWindow = nullptr;
-    m_windowMouseSnapper = WindowMouseSnap::Create(window, m_workAreaConfiguration.GetAllWorkAreas(), m_notificationUtil.get());
+    m_windowMouseSnapper = WindowMouseSnap::Create(window, m_workAreaConfiguration.GetAllWorkAreas());
     if (m_windowMouseSnapper)
     {
         if (FancyZonesSettings::settings().spanZonesAcrossMonitors)
@@ -1099,7 +1085,6 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     {
     case WM_QUERYENDSESSION:
         return TRUE;
-
     case WM_ENDSESSION:
         if (wparam)
         {
@@ -1869,11 +1854,6 @@ void FancyZones::SettingsUpdate(SettingId id)
 {
     switch (id)
     {
-    case SettingId::EditorHotkey:
-    {
-        UpdateHotkey(static_cast<int>(HotkeyId::Editor), FancyZonesSettings::settings().editorHotkey, true);
-    }
-    break;
     case SettingId::WindowSwitching:
     {
         UpdateHotkey(static_cast<int>(HotkeyId::PrevTab), FancyZonesSettings::settings().prevTabHotkey, FancyZonesSettings::settings().windowSwitching);
@@ -2280,6 +2260,13 @@ void FancyZones::DockMoveToPage(HWND window, Dock::Edge edge) noexcept
         return;
     }
 
+    // The last page allowed has no page below
+    const int pages = FancyZonesSettings::settings().desktopScrollPages;
+    if (down && pages > 0 && DockLayouts::instance().Page(workArea->UniqueId()) + 1 >= pages)
+    {
+        return;
+    }
+
     m_dockCarried = docked ? window : nullptr;
     if (docked)
     {
@@ -2540,7 +2527,7 @@ void FancyZones::DockLoad(std::wstring name) noexcept
     std::vector<WorkArea*> loaded;
     for (const auto& [_, workArea] : workAreas)
     {
-        const auto iter = workArea ? trees.find(workArea->UniqueId().monitorId.toString()) : trees.end();
+        const auto iter = workArea ? DockCommands::FindMonitor(trees, workArea->UniqueId().monitorId) : trees.end();
         if (iter == trees.end())
         {
             continue;

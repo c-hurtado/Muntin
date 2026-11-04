@@ -3,6 +3,10 @@
 #include "FancyZonesLib\DockMotion.h"
 #include "FancyZonesLib\DockTree.h"
 #include "FancyZonesLib\FancyZonesData\DockLayouts.h"
+#include "FancyZonesLib\Settings.h"
+
+#include <filesystem>
+#include <fstream>
 
 #include "Util.h"
 
@@ -35,11 +39,54 @@ namespace FancyZonesUnitTests
             layouts.Tree(id).root.reset();
         }
 
-        TEST_METHOD (DesktopScrollReachesTheEmptyPagePastTheLastWindow)
+        TEST_METHOD (SavingASettingKeepsTheOthers)
         {
-            Assert::AreEqual(2160.0, DesktopScroll::ScrollLimit(0, 2160));
-            Assert::AreEqual(2160.0, DesktopScroll::ScrollLimit(2073, 2160));
-            Assert::AreEqual(4320.0, DesktopScroll::ScrollLimit(2500, 2160));
+            const auto file = (std::filesystem::temp_directory_path() / L"fanciestzones-test-settings.json").wstring(); // Never the real settings
+            json::to_file(file, json::JsonObject::Parse(LR"({"properties":{"fancyzones_dockGap":{"value":12}},"name":"FancyZones","version":"1.0"})"));
+
+            FancyZonesSettings::SaveValue(NonLocalizable::DesktopScrollPagesID, json::value(3), file);
+
+            const auto properties = json::from_file(file)->GetNamedObject(L"properties");
+            DeleteFileW(file.c_str());
+            Assert::AreEqual(12.0, properties.GetNamedObject(L"fancyzones_dockGap").GetNamedNumber(L"value"));
+            Assert::AreEqual(3.0, properties.GetNamedObject(L"fancyzones_desktopScrollPages").GetNamedNumber(L"value"));
+        }
+
+        TEST_METHOD (SavingASettingWithoutAFileMakesOne)
+        {
+            const auto file = (std::filesystem::temp_directory_path() / L"fanciestzones-test-settings.json").wstring();
+            DeleteFileW(file.c_str());
+
+            FancyZonesSettings::SaveValue(NonLocalizable::ShiftDragID, json::value(false), file);
+
+            const auto saved = json::from_file(file);
+            DeleteFileW(file.c_str());
+            Assert::IsTrue(saved.has_value());
+            Assert::IsFalse(saved->GetNamedObject(L"properties").GetNamedObject(L"fancyzones_shiftDrag").GetNamedBoolean(L"value"));
+        }
+
+        TEST_METHOD (SavingASettingLeavesAnUnreadableFileAlone)
+        {
+            const auto file = (std::filesystem::temp_directory_path() / L"fanciestzones-test-settings.json").wstring();
+            const std::string broken = R"({"properties":{"fancyzones_dockGap":{"value":12}},)";
+            std::ofstream{ file, std::ios::binary } << broken;
+
+            const bool saved = FancyZonesSettings::SaveValue(NonLocalizable::ShiftDragID, json::value(false), file);
+
+            std::ifstream in{ file, std::ios::binary };
+            const std::string after{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+            in.close();
+            DeleteFileW(file.c_str());
+            Assert::IsFalse(saved);
+            Assert::AreEqual(broken, after);
+        }
+
+        TEST_METHOD (DesktopScrollStopsAtThePageLimit)
+        {
+            Assert::AreEqual(0.0, DesktopScroll::ScrollLimit(0, 2160, 1)); // One page: no scrolling
+            Assert::AreEqual(2160.0, DesktopScroll::ScrollLimit(4000, 2160, 2));
+            Assert::AreEqual(8640.0, DesktopScroll::ScrollLimit(9000, 2160, 2)); // A window left on page 5 stays reachable
+            Assert::AreEqual(6480.0, DesktopScroll::ScrollLimit(0, 2160, 4)); // Every page is reachable, even with nothing docked
         }
 
         TEST_METHOD (DesktopScrollOverviewIsTheRealPlaceAtFullSize)
@@ -214,6 +261,76 @@ namespace FancyZonesUnitTests
             tree.Insert(m_b, L"", target.value());
             CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
             CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, m_b));
+        }
+
+        TEST_METHOD (SecondWindowOnTheOtherEdgeLeavesNoHole)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            DockAt(tree, m_b, { 990, 400 });
+
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, m_b));
+            Assert::AreEqual(size_t{ 2 }, tree.Leaves().size());
+
+            // The first window keeps the whole left side when the right side is split
+            DockAt(tree, m_c, { 750, 700 });
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 500, 400, 1000, 800 }, RectOf(tree, m_c));
+        }
+
+        TEST_METHOD (SecondWindowOnTheSameEdgePushesTheFirstOver)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            DockAt(tree, m_b, { 10, 400 });
+
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_b));
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, m_a));
+        }
+
+        TEST_METHOD (SecondWindowOnTheBottomEdgeStretchesTheFirst)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            DockAt(tree, m_b, { 500, 790 });
+
+            CustomAssert::AreEqual(RECT{ 0, 0, 1000, 400 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, RectOf(tree, m_b));
+        }
+
+        TEST_METHOD (EdgeDropKeepsSlotsOfApps)
+        {
+            auto tree = SideBySide();
+            KeepSlot(tree, m_b, L"b.exe");
+            DockAt(tree, m_c, { 500, 790 });
+
+            Assert::AreEqual(size_t{ 3 }, tree.Leaves().size());
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, RectOf(tree, m_c));
+        }
+
+        TEST_METHOD (EdgeDropLeavesAHiddenWindowItsPlace)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            tree.Find(m_a)->hidden = true;
+
+            DockAt(tree, m_b, { 990, 400 });
+
+            Assert::IsNotNull(tree.Find(m_a));
+        }
+
+        TEST_METHOD (EdgeDropClosesNestedEmptySlots)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            DockAt(tree, m_b, { 100, 700 }); // Below a, on the left. The right half stays empty.
+            DockAt(tree, m_c, { 990, 400 });
+
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 400 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 0, 400, 500, 800 }, RectOf(tree, m_b));
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, m_c));
+            Assert::AreEqual(size_t{ 3 }, tree.Leaves().size());
         }
 
         TEST_METHOD (DropOnWindowEdgeSplitsWindow)
@@ -604,11 +721,26 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(tree.Grow(m_a, m_area, 0, true, 100));
         }
 
+        TEST_METHOD (ARenumberedDisplayIsTheSameMonitor)
+        {
+            const auto monitor = [](const wchar_t* instance, int number, const wchar_t* serial) {
+                return FancyZonesDataTypes::MonitorId{ .deviceId = { .id = L"ACR0808", .instanceId = instance, .number = number }, .serialNumber = serial };
+            };
+            std::map<std::wstring, int> saved{ { L"ACR0808_5&728d9c2&1&UID4352_2_134744072", 1 }, { L"ACR0808_5&728d9c2&1&UID4353_1_134744072", 2 }, { L"ACR0808_UID9_3_AB_12", 3 } };
+
+            Assert::AreEqual(1, DockCommands::FindMonitor(saved, monitor(L"5&728d9c2&1&UID4352", 7, L"134744072"))->second);
+            Assert::AreEqual(2, DockCommands::FindMonitor(saved, monitor(L"5&728d9c2&1&UID4353", 6, L"134744072"))->second);
+            Assert::AreEqual(3, DockCommands::FindMonitor(saved, monitor(L"UID9", 4, L"AB_12"))->second); // A serial with _
+            Assert::IsTrue(DockCommands::FindMonitor(saved, monitor(L"5&728d9c2&1&UID4354", 2, L"134744072")) == saved.end()); // Another port
+            Assert::IsTrue(DockCommands::FindMonitor(saved, monitor(L"5&728d9c2&1&UID4352", 2, L"999")) == saved.end()); // Another serial
+            Assert::IsTrue(DockCommands::FindMonitor(saved, monitor(L"UID9", 4, L"12")) == saved.end()); // Only the end of a serial
+        }
+
         TEST_METHOD (LayoutNamesThatCantBeShortcutsAreRefused)
         {
             Assert::IsTrue(DockCommands::IsValidName(L"DevLayout"));
             Assert::IsTrue(DockCommands::IsValidName(L"Dev Layout 2"));
-            for (const auto name : { L"", L"a:b", L"a\\b", L"..\\x", L"%USERNAME%", L"name.", L"name ", L"con", L"a\nb" })
+            for (const auto name : { L"", L"a:b", L"a\\b", L"..\\x", L"%USERNAME%", L"name.", L"name ", L"con", L"a\nb", L"a\"b" })
             {
                 Assert::IsFalse(DockCommands::IsValidName(name), name);
             }

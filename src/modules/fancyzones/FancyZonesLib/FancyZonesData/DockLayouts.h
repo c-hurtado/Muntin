@@ -33,8 +33,8 @@ namespace DockCommands
 {
     // FanciestZones.exe save|load|delete <name> sends "<verb>\n<name>" to the running instance with WM_COPYDATA
     constexpr ULONG_PTR CopyDataId = 0x465A4443;
-    // Class of the main window of the running instance
-    constexpr wchar_t WindowClassName[] = L"SuperFancyZones";
+    // Class of the main window of the running instance. Not the class of stock FancyZones, which may run too.
+    constexpr wchar_t WindowClassName[] = L"FanciestZones";
 
     // A layout name is also the name of a Start menu shortcut file, and shell arguments expand %
     inline bool IsValidName(const std::wstring& name) noexcept
@@ -50,6 +50,30 @@ namespace DockCommands
     {
         bool operator()(const std::wstring& a, const std::wstring& b) const noexcept { return _wcsicmp(a.c_str(), b.c_str()) < 0; }
     };
+
+    // A saved monitor key is "<id>_<instance>_<display number>_<serial>" (MonitorId::toString). Windows renumbers the
+    // displays (DISPLAY2 becomes DISPLAY7) after restarts and driver resets, so a key of the same monitor may differ
+    // in the number only, which stock FancyZones also ignores when it compares monitors.
+    inline bool IsKeyOfMonitor(const std::wstring& key, const FancyZonesDataTypes::MonitorId& monitor)
+    {
+        const std::wstring prefix = monitor.deviceId.id + L"_" + monitor.deviceId.instanceId + L"_";
+        const std::wstring suffix = L"_" + monitor.serialNumber;
+        if (key.size() <= prefix.size() + suffix.size() || !key.starts_with(prefix) || !key.ends_with(suffix))
+        {
+            return false;
+        }
+
+        const std::wstring_view number = std::wstring_view{ key }.substr(prefix.size(), key.size() - prefix.size() - suffix.size());
+        return std::all_of(number.begin(), number.end(), [](wchar_t c) { return (c >= L'0' && c <= L'9') || c == L'-'; });
+    }
+
+    // The entry saved for monitor: its exact key, else one that differs in the display number only
+    template<typename Map>
+    auto FindMonitor(Map& map, const FancyZonesDataTypes::MonitorId& monitor)
+    {
+        const auto exact = map.find(monitor.toString());
+        return exact != map.end() ? exact : std::find_if(map.begin(), map.end(), [&](const auto& entry) { return IsKeyOfMonitor(entry.first, monitor); });
+    }
 }
 
 // Dock layouts of every work area, and the layouts saved by hotkey or by name

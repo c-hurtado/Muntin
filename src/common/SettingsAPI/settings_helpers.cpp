@@ -11,6 +11,7 @@ namespace PTSettingsHelper
     constexpr inline const wchar_t* DataDiagnosticsRegKey = L"Software\\Classes\\PowerToys";
     constexpr inline const wchar_t* DataDiagnosticsRegValueName = L"AllowDataDiagnostics";
 
+    // FanciestZones keeps its files in a folder of its own, %LOCALAPPDATA%\FanciestZones, apart from PowerToys
     std::wstring get_root_save_folder_location()
     {
         PWSTR local_app_path;
@@ -18,7 +19,7 @@ namespace PTSettingsHelper
         std::wstring result{ local_app_path };
         CoTaskMemFree(local_app_path);
 
-        result += L"\\Microsoft\\PowerToys";
+        result += L"\\FanciestZones";
         std::filesystem::path save_path(result);
         if (!std::filesystem::exists(save_path))
         {
@@ -43,17 +44,10 @@ namespace PTSettingsHelper
         return result;
     }
 
-    std::wstring get_module_save_folder_location(std::wstring_view powertoy_key)
+    // FanciestZones has one module: its files are right in the root folder
+    std::wstring get_module_save_folder_location(std::wstring_view)
     {
-        std::wstring result = get_root_save_folder_location();
-        result += L"\\";
-        result += powertoy_key;
-        std::filesystem::path save_path(result);
-        if (!std::filesystem::exists(save_path))
-        {
-            std::filesystem::create_directories(save_path);
-        }
-        return result;
+        return get_root_save_folder_location();
     }
 
     std::wstring get_module_save_file_location(std::wstring_view powertoy_key)

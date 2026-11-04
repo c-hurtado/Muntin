@@ -1,7 +1,5 @@
 #pragma once
 
-#include <common/notifications/NotificationUtil.h>
-
 class WorkArea;
 
 class WindowMouseSnap
@@ -9,7 +7,7 @@ class WindowMouseSnap
     WindowMouseSnap(HWND window, const std::unordered_map<HMONITOR, std::unique_ptr<WorkArea>>& activeWorkAreas);
 
 public:
-    static std::unique_ptr<WindowMouseSnap> Create(HWND window, const std::unordered_map<HMONITOR, std::unique_ptr<WorkArea>>& activeWorkAreas, notifications::NotificationUtil* notificationUtil);
+    static std::unique_ptr<WindowMouseSnap> Create(HWND window, const std::unordered_map<HMONITOR, std::unique_ptr<WorkArea>>& activeWorkAreas);
     ~WindowMouseSnap();
 
     HWND GetDraggedWindow() const noexcept { return m_window; }

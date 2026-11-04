@@ -33,6 +33,8 @@ enum struct LayoutNameLabelPlacement : int
 };
 
 // in reality, this file needs to be kept in sync currently with src/settings-ui/Settings.UI.Library/FZConfigProperties.cs
+constexpr int MaxDesktopScrollPages = 4;
+
 struct Settings
 {
     // The values specified here are the defaults.
@@ -68,6 +70,7 @@ struct Settings
     bool dockAutoTile = false; // New windows dock by themselves, splitting the focused docked window
     bool dockAnimation = true; // Windows moved with Shift+Win+arrows spring to their new places
     bool desktopScrollOverview = false; // Scrolling the desktop zooms out to the pages, and ends on a page
+    int desktopScrollPages = 2; // Pages each monitor scrolls through, the first included, at most MaxDesktopScrollPages. 1: no scrolling.
     bool dockEdgeSnap = true; // A window dragged to the left or right edge docks there without Shift, like Windows snap
     int dockEdgeSnapBand = 12; // Pixels from that edge within which it docks
     int dockGap = 8; // Pixels left between docked windows
@@ -121,6 +124,10 @@ public:
     void RemoveObserver(SettingsObserver& observer);
 
     void LoadSettings();
+
+    // Writes one setting to the settings file, keeping the others. id: one of the names in SettingsConstants.h.
+    // False when the file is there but can't be read: it is left as it is.
+    static bool SaveValue(const wchar_t* id, const json::JsonValue& value, const std::wstring& file = GetSettingsFileName());
 
 private:
     FancyZonesSettings();

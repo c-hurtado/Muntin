@@ -23,13 +23,13 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", COMPANY_NAME
+            VALUE "CompanyName", "FanciestZones contributors"
             VALUE "FileDescription", FILE_DESCRIPTION
             VALUE "FileVersion", FILE_VERSION_STRING
             VALUE "InternalName", INTERNAL_NAME
-            VALUE "LegalCopyright", COPYRIGHT_NOTE
+            VALUE "LegalCopyright", "Copyright (C) Microsoft Corporation and FanciestZones contributors. MIT License."
             VALUE "OriginalFilename", ORIGINAL_FILENAME
-            VALUE "ProductName", PRODUCT_NAME
+            VALUE "ProductName", "FanciestZones"
             VALUE "ProductVersion", PRODUCT_VERSION_STRING
         END
     END

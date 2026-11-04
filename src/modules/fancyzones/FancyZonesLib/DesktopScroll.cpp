@@ -604,13 +604,13 @@ struct DesktopScroll::Impl
         LONG lowest = 0;
         for (const auto& entry : screen.entries)
         {
-            if (entry.window != riding) // It doesn't make the canvas longer: carrying a window on ends at the first empty page
+            if (entry.window != riding) // A carried window doesn't make the canvas longer, so it can't be carried past the last page
             {
                 lowest = (std::max)(lowest, entry.canvasTop + entry.height - screen.top);
             }
         }
 
-        const double limit = (std::max)(DesktopScroll::ScrollLimit(lowest, screen.height), std::ceil(screen.offset / screen.height) * screen.height);
+        const double limit = (std::max)(DesktopScroll::ScrollLimit(lowest, screen.height, FancyZonesSettings::settings().desktopScrollPages), std::ceil(screen.offset / screen.height) * screen.height);
         const auto clampTarget = [&] { target = std::clamp(target, 0.0, limit); };
         target = destination ? *destination : screen.offset + pixels;
         clampTarget();

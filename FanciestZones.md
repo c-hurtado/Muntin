@@ -1,21 +1,20 @@
 # FanciestZones reference
 
-FanciestZones is a personal fork of PowerToys FancyZones. It docks windows by drag instead of snapping them to zones drawn in advance, in the style of TrellisWM on macOS. This page covers how to run it, use it, configure it and install it on another computer.
+FanciestZones is a fork of PowerToys FancyZones. It docks windows by drag instead of snapping them to zones drawn in advance, in the style of TrellisWM on macOS. It runs on its own, without PowerToys. This page covers how to run it, use it, configure it and build it.
 
 ## Run it
 
 | What | Where |
 |---|---|
-| Executable | `%LOCALAPPDATA%\FanciestZones\FanciestZones.exe` (Release build, copied from `x64\Release`) |
-| Starts at sign-in through | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FanciestZones.lnk` |
-| Stop it | End `FanciestZones.exe` in Task Manager |
-| Start it again | Run the shortcut or the executable |
-| Logs | `%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones\Logs` |
+| Executable | `FanciestZones.exe`, wherever you put it, for example `%LOCALAPPDATA%\FanciestZones` |
+| Settings, layouts and logs | `%LOCALAPPDATA%\FanciestZones` |
+| Starts at sign-in | When **Start at sign-in** is checked in the tray menu (a shortcut in the Startup folder) |
+| Stop it | **Quit** in the tray menu |
+| Start it again | Run the executable, or `FanciestZones restart` |
 
-Two rules keep it running:
+Keep **FancyZones turned off in PowerToys**. While FancyZones of PowerToys runs, FanciestZones refuses to start, because both would move the same windows. PowerToys can still start its FancyZones after FanciestZones is running, so turn it off there.
 
-- Keep **FancyZones turned off in PowerToys**. The fork and the stock FancyZones share one instance lock, so only the one that starts first runs.
-- Do not turn FancyZones on and then off in PowerToys. Turning it off sends a shutdown signal that the fork also obeys. If the fork closes, start it again.
+The FanciestZones icon sits in the notification area. Windows may put it in the overflow menu at first; to keep it visible, drag it onto the taskbar, or turn it on under **Settings > Personalization > Taskbar > Other system tray icons**.
 
 ## Use it
 
@@ -25,7 +24,7 @@ Hold **Shift** while you drag a window (see `fancyzones_shiftDrag` to change tha
 
 | Drop the window | Result |
 |---|---|
-| Near an edge of the screen | It takes that half of the screen |
+| Near an edge of the screen | It takes that half of the screen, and the docked windows share the other half. An empty half closes up, so no hole is left next to the windows. |
 | On the outer part of a docked window | It splits that window on that side. Splits nest. |
 | On an empty half | It fills it |
 | In the middle of a docked window | Nothing: the window floats |
@@ -50,7 +49,7 @@ Shift+Win+arrows move the window:
 | Floating, Up or Down | Carries it to the page above or below, where it stays floating. On the first page Up docks it at the top. |
 | Docked, with a neighbor on that side | Swaps the two. Also moves it into an empty half. |
 | Docked, with nothing on that side | Moves it to the monitor on that side, docked on the edge it came in from |
-| Docked, Up or Down, with nothing on that side and no monitor there | Scrolls to the page above or below and takes the window along, docked on the same side, or in the empty half if the page has one. It stops at the first empty page. |
+| Docked, Up or Down, with nothing on that side and no monitor there | Scrolls to the page above or below and takes the window along, docked on the same side, or in the empty half if the page has one. It stops at the last page (see `fancyzones_desktopScrollPages`). |
 
 They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
 
@@ -103,7 +102,7 @@ Saving a monitor with nothing docked changes nothing: the layout already saved u
 A named layout covers every monitor, and loading it starts the apps that aren't open.
 
 1. Dock the windows the way you want them, on any monitors.
-2. In a terminal or the Run box (Win+R): `FanciestZones save DevLayout` (the install folder is on the user PATH)
+2. Right-click the tray icon, choose **Save layout...** and type a name, such as `DevLayout`. Or, in a terminal or the Run box (Win+R): `FanciestZones save DevLayout` (with the folder of `FanciestZones.exe` on your PATH; otherwise give the whole path of the exe)
 3. Load it from Command Palette or Windows search: type `DevLayout` and run it. The same works with `FanciestZones.exe load DevLayout`.
 
 | Command | What it does |
@@ -125,15 +124,15 @@ A named layout covers every monitor, and loading it starts the apps that aren't 
 
 Layouts are kept per monitor and per virtual desktop in `dock-layouts.json`, and they survive a restart. When a docked window is gone at startup, its place is kept for that app, and the next window of the app takes it. After a reboot, apps return to their places as you open them. A kept place can also be filled by hand: Shift-drag any window onto it. Layouts of virtual desktops that were deleted are dropped.
 
-To forget all layouts and saved digits, stop the fork, delete `%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones\dock-layouts.json`, and start the fork again.
+To forget all layouts and saved digits, quit FanciestZones, delete `%LOCALAPPDATA%\FanciestZones\dock-layouts.json`, and start it again.
 
 ## Configure it
 
-All settings are in one file, shared with stock FancyZones:
+The tray menu (right-click the FanciestZones icon) turns the most used settings on and off. All settings are in one file:
 
-`%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones\settings.json`
+`%LOCALAPPDATA%\FanciestZones\settings.json`
 
-Edit the file in a text editor and save it. The fork reloads it right away, with no restart. Each setting is an entry under `properties` with a `value`:
+**Open settings folder** in the tray menu opens its folder. Edit the file in a text editor and save it. FanciestZones reloads it right away, with no restart. Each setting is an entry under `properties` with a `value`:
 
 ```json
 {
@@ -170,6 +169,7 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_dockAutoTile` | New windows dock by themselves (see "Dock new windows by themselves") | `false` |
 | `fancyzones_dockAnimation` | Windows moved with Shift+Win+arrows or the < > buttons spring to their new places | `true` |
 | `fancyzones_desktopScrollOverview` | Scrolling the desktop zooms out to the pages (see "Scroll the desktop") | `false` |
+| `fancyzones_desktopScrollPages` | How many pages each monitor scrolls through, the first included, empty pages too: 1 to 4. 1 turns scrolling off, and Shift+Win+Down doesn't take a window past the last page. | 2 |
 | `fancyzones_dockEdgeSnap` | A window dragged to the left or right edge of a screen docks there without Shift, like Windows snap. The top edge is left to Windows (it maximizes), and the bottom edge is the taskbar. Only with `fancyzones_shiftDrag` on. | `true` |
 | `fancyzones_dockEdgeSnapBand` | How close to that edge, in pixels, the cursor must be (1 to 100) | 12 |
 | `fancyzones_restoreSize` | A window that is undocked gets back the size it had before | `false` |
@@ -190,14 +190,9 @@ A value outside the allowed range is brought back to the nearest allowed value.
 
 The fork ignores the zone settings: the zone editor hotkey, zone numbers, "show zones on all monitors", "move newly created windows to their last known zone", "move windows based on their position", and the overlapping zones choice.
 
-### About the PowerToys settings window
+### The first run
 
-The FancyZones page of PowerToys Settings writes the same file. Two cautions:
-
-- Its controls are expected to be unavailable while FancyZones is off in PowerToys, which is how the fork needs it. This was not checked.
-- PowerToys only knows its own settings. If it rewrites the file, it may drop the three docking settings. The fork then uses their defaults until you add them again.
-
-A copy of the file from before the docking settings were added is next to it: `settings.json.before-dock-settings.bak`.
+FanciestZones used to keep its files in the folder of PowerToys FancyZones, `%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones`. When its own folder has neither `settings.json` nor `dock-layouts.json`, it copies those two files from there, so settings and layouts carry over. The originals stay where they are. From then on PowerToys Settings no longer changes the settings of FanciestZones.
 
 ## Known limits
 
@@ -212,40 +207,31 @@ A copy of the file from before the docking settings were added is next to it: `s
 
 The release build is one file, `FanciestZones.exe`. It needs Windows 10 or 11 (64-bit) and nothing else: no PowerToys, no Visual Studio, no runtime to install.
 
-1. On this computer, build the release version (see "Rebuild it", with `-p:Configuration=Release`). The file is `C:\Users\carlo\Tools\FanciestZones\x64\Release\FanciestZones.exe`.
-2. Copy that file to the other computer, for example to `%LOCALAPPDATA%\FanciestZones\`.
-3. If PowerToys is installed there, turn FancyZones off in it.
-4. Make it start at sign-in, and start it now. In PowerShell:
-
-   ```powershell
-   $exe = "$env:LOCALAPPDATA\FanciestZones\FanciestZones.exe"
-   $link = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Startup'))\FanciestZones.lnk")
-   $link.TargetPath = $exe; $link.Save()
-   Start-Process $exe
-   ```
-
-5. Optional: copy your `settings.json` to `%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones\` on the other computer (create the folder if it isn't there). Without it the defaults apply: docking needs Shift, and Win+arrows are left to Windows. Don't copy `dock-layouts.json`: layouts belong to the monitors of one computer.
+1. Copy `FanciestZones.exe` to the other computer, for example to `%LOCALAPPDATA%\FanciestZones\`.
+2. If PowerToys is installed there, turn FancyZones off in it.
+3. Run it, right-click its tray icon, and check **Start at sign-in**.
+4. Optional: copy your `settings.json` to `%LOCALAPPDATA%\FanciestZones\` on the other computer. Don't copy `dock-layouts.json`: layouts belong to the monitors of one computer.
 
 Things to expect:
 
 - The file isn't signed. If you download it instead of copying it from a drive, Windows SmartScreen may ask before the first run: choose "More info", then "Run anyway".
-- To update, end `FanciestZones.exe`, replace the file, and start it again.
-
-This was checked on this computer only: the release file, copied alone into an empty folder, passed the whole live test. It was not tried on a computer without PowerToys.
-
+- To update, quit FanciestZones from its icon, replace the file, and start it again.
 ## Rebuild it
 
 Only the C++ part of PowerToys builds with Visual Studio 2022, and that is all the fork needs. The installed exe is locked while it runs, so stop the fork before copying the new build over it.
 
 ```powershell
+# From the root of the repository
 & "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" `
-  C:\Users\carlo\Tools\FanciestZones\src\modules\fancyzones\FancyZones\FancyZones.vcxproj `
-  -p:Platform=x64 -p:Configuration=Release "-p:SolutionDir=C:\Users\carlo\Tools\FanciestZones\\" -m
+  src\modules\fancyzones\FancyZones\FancyZones.vcxproj -restore -p:RestorePackagesConfig=true `
+  -p:Platform=x64 -p:Configuration=Release "-p:SolutionDir=$PWD\\" -m
 Stop-Process -Name FanciestZones -ErrorAction SilentlyContinue
-Copy-Item C:\Users\carlo\Tools\FanciestZones\x64\Release\FanciestZones.exe "$env:LOCALAPPDATA\FanciestZones\" -Force
+Copy-Item x64\Release\FanciestZones.exe "$env:LOCALAPPDATA\FanciestZones\" -Force
 Start-Process "$env:LOCALAPPDATA\FanciestZones\FanciestZones.exe"
 ```
 
-The build lands in `x64\Release`, which is disposable (about 15 GB of intermediates with a Debug build, so delete `x64` freely). The startup shortcut, the Start menu layout shortcuts and the user PATH all point at the installed copy in `%LOCALAPPDATA%\FanciestZones`, never at the build folder. Use `-p:Configuration=Debug` only for debugging: the debug exe only runs where Visual Studio is installed.
+The build lands in `x64\Release`, which is disposable (about 15 GB of intermediates with a Debug build, so delete `x64` freely). Point shortcuts at an installed copy, never at the build folder. Use `-p:Configuration=Debug` only for debugging: the debug exe only runs where Visual Studio is installed. If the Release link fails with LNK1201 while writing the PDB, set `$env:_LINK_ = '/DEBUG:NONE'` first.
+
+Unit tests: build `src\modules\fancyzones\FancyZonesTests\UnitTests\UnitTests.vcxproj` the same way with `-p:Configuration=Debug`, then run `vstest.console.exe x64\Debug\tests\FancyZones.UnitTests\FancyZones.UnitTests.dll /TestCaseFilter:FullyQualifiedName~DockTree`.
 
 `tools\dock-live-test\docktest.ps1 -Monitor 0` (or `-Monitor 1`) checks the whole feature with real test windows. It takes over the mouse and keyboard for about a minute. `-Only keys` (or `dock`, `resize`, `slots`, `monitors`, `close`, several separated by commas) runs only those sections, after docking two windows side by side; sections that build on earlier ones bring them along.

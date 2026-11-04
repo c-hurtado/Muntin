@@ -1,9 +1,7 @@
 ﻿#include "pch.h"
 
-#include <common/utils/ProcessWaiter.h>
 #include <common/utils/window.h>
 #include <common/utils/UnhandledExceptionHandler.h>
-#include <common/utils/gpo.h>
 
 #include <FancyZonesLib/trace.h>
 #include <FancyZonesLib/Generated Files/resource.h>
@@ -12,12 +10,16 @@
 #include <common/hooks/LowlevelKeyboardEvent.h>
 #include <common/utils/resources.h>
 
-#include <common/Telemetry/EtwTrace/EtwTrace.h>
 
 #include <FancyZonesLib/FancyZones.h>
 #include <FancyZonesLib/FancyZonesWinHookEventIDs.h>
 #include <FancyZonesLib/ModuleConstants.h>
 #include <FancyZonesLib/FancyZonesData/DockLayouts.h>
+#include <FancyZonesLib/Settings.h>
+#include <FancyZonesLib/Tray.h>
+
+#include <filesystem>
+#include <fstream>
 
 #include <KnownFolders.h>
 #include <shellapi.h>
@@ -30,7 +32,8 @@
 // Non-localizable
 const std::wstring moduleName = L"FancyZones";
 const std::wstring internalPath = L"";
-const std::wstring instanceMutexName = L"Local\\PowerToys_FancyZones_InstanceMutex";
+const std::wstring instanceMutexName = L"Local\\FanciestZones_InstanceMutex";
+const std::wstring stockMutexName = L"Local\\PowerToys_FancyZones_InstanceMutex"; // FancyZones of PowerToys, which can't run alongside
 
 namespace
 {
@@ -63,6 +66,43 @@ namespace
             const auto utf8 = winrt::to_string(text);
             WriteFile(out, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
         }
+    }
+
+    // Builds before November 2026 kept their files with those of PowerToys FancyZones. They are copied over once, never
+    // over a file that is already there, and a marker file says it was done: deleting the layouts later to start afresh
+    // doesn't bring the old ones back. The originals stay, PowerToys may still use them.
+    // Returns true on the first run ever: no layouts here, and none from an earlier FanciestZones either.
+    bool TakeOverPowerToysFiles()
+    {
+        namespace fs = std::filesystem;
+        std::error_code error;
+        const fs::path folder = PTSettingsHelper::get_root_save_folder_location();
+        const fs::path marker = folder / L"imported-from-powertoys";
+        if (fs::exists(marker, error))
+        {
+            return false;
+        }
+
+        bool firstRun = !fs::exists(folder / L"dock-layouts.json", error);
+        wil::unique_cotaskmem_string localAppData;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppData)))
+        {
+            const fs::path old = fs::path{ localAppData.get() } / L"Microsoft" / L"PowerToys" / L"FancyZones";
+            firstRun = firstRun && !fs::exists(old / L"dock-layouts.json", error);
+            for (const auto name : { L"settings.json", L"dock-layouts.json" })
+            {
+                fs::copy_file(old / name, folder / name, fs::copy_options::skip_existing, error);
+            }
+
+            // Only an earlier FanciestZones writes this one: where scrolled windows belong, after a crash. Moved, so that it is used once.
+            if (!fs::exists(folder / L"desktop-scroll.txt", error))
+            {
+                fs::rename(old / L"desktop-scroll.txt", folder / L"desktop-scroll.txt", error);
+            }
+        }
+
+        std::ofstream{ marker };
+        return firstRun;
     }
 
     // Names of the saved layouts, one per line. Read from the file: no running instance is needed.
@@ -194,18 +234,9 @@ namespace
 
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ PWSTR lpCmdLine, _In_ int nCmdShow)
 {
-    Shared::Trace::ETWTrace trace{};
-    trace.UpdateState(true);
-
+    // No telemetry: the PowerToys events and trace sessions are left out
     winrt::init_apartment();
     LoggerHelpers::init_logger(moduleName, internalPath, LogSettings::fancyZonesLoggerName);
-
-    if (powertoys_gpo::getConfiguredFancyZonesEnabledValue() == powertoys_gpo::gpo_rule_configured_disabled)
-    {
-        Logger::warn(L"Tried to start with a GPO policy setting the utility to always be disabled. Please contact your systems administrator.");
-        return 0;
-    }
-
     InitUnhandledExceptionHandler();
 
     // A command for the running instance. A command process always exits: a shell waits for it when its output is piped.
@@ -275,9 +306,24 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     if (GetLastError() == ERROR_ALREADY_EXISTS)
     {
-        Logger::warn(L"FancyZones instance is already running");
+        Logger::warn(L"FanciestZones is already running");
         return 0;
     }
+
+    // Both would dock the same windows. A PowerToys that runs as administrator denies access to its lock, which also means it's there.
+    SetLastError(ERROR_SUCCESS);
+    wil::unique_handle stock{ OpenMutexW(SYNCHRONIZE, FALSE, stockMutexName.c_str()) };
+    if (stock || GetLastError() == ERROR_ACCESS_DENIED)
+    {
+        MessageBoxW(nullptr, L"FancyZones of PowerToys is running, and the two can't run together. Turn FancyZones off in PowerToys Settings, then start FanciestZones again.", L"FanciestZones", MB_OK | MB_ICONWARNING);
+        return 0;
+    }
+
+    // Holding the lock of stock FancyZones keeps it from starting while FanciestZones runs
+    wil::unique_handle stockBlock{ CreateMutexW(nullptr, FALSE, stockMutexName.c_str()) };
+
+    // After the checks, so that a run that gave up doesn't use up the welcome
+    const bool firstRun = TakeOverPowerToysFiles();
 
     auto process = GetCurrentProcess();
     if (!SetPriorityClass(process, NORMAL_PRIORITY_CLASS))
@@ -286,40 +332,18 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         Logger::warn(L"Failed to set priority to FancyZones: {}", err);
     }
 
-    // Started by the PowerToys runner with its process id
-    std::wstring pid = std::wstring(lpCmdLine);
-    if (!std::all_of(pid.begin(), pid.end(), iswdigit))
-    {
-        pid.clear();
-    }
-    if (!pid.empty())
-    {
-        auto mainThreadId = GetCurrentThreadId();
-        ProcessWaiter::OnProcessTerminate(pid, [mainThreadId](int err) {
-            if (err != ERROR_SUCCESS)
-            {
-                Logger::error(L"Failed to wait for parent process exit. {}", get_last_error_or_default(err));
-            }
-            else
-            {
-                Logger::trace(L"PowerToys runner exited.");
-            }
-
-            Logger::trace(L"Exiting FancyZones");
-            PostThreadMessage(mainThreadId, WM_QUIT, 0, 0);
-        });
-    }
-
-    Trace::RegisterProvider();
-
     FancyZonesApp app(GET_RESOURCE_STRING(IDS_FANCYZONES), NonLocalizable::ModuleKey);
     app.Run();
 
+    // A settings file of its own, so that the welcome is said once
+    if (firstRun)
+    {
+        FancyZonesSettings::SaveValue(NonLocalizable::ShiftDragID, json::value(FancyZonesSettings::settings().shiftDrag));
+    }
+
+    Tray::Start(hInstance, firstRun);
     run_message_loop();
-
-    Trace::UnregisterProvider();
-
-    trace.Flush();
+    Tray::Stop();
 
     return 0;
 }

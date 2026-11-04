@@ -5,9 +5,9 @@
 //////////////////////////////
 // Non-localizable
 
-#define FILE_DESCRIPTION "PowerToys.FancyZones"
-#define INTERNAL_NAME "FancyZones"
-#define ORIGINAL_FILENAME "PowerToys.FancyZones.exe"
+#define FILE_DESCRIPTION "FanciestZones"
+#define INTERNAL_NAME "FanciestZones"
+#define ORIGINAL_FILENAME "FanciestZones.exe"
 
 // Non-localizable
 //////////////////////////////

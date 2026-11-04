@@ -5,7 +5,6 @@
 #include <common/utils/logger_helper.h>
 #include <common/utils/resources.h>
 #include <common/utils/UnhandledExceptionHandler.h>
-#include <common/interop/shared_constants.h>
 
 #include <FancyZonesLib/Generated Files/resource.h>
 #include <FancyZonesLib/FancyZonesData.h>
@@ -21,14 +20,8 @@ FancyZonesApp::FancyZonesApp(const std::wstring& appName, const std::wstring& ap
     InitializeWinhookEventIds();
     m_app = MakeFancyZones(reinterpret_cast<HINSTANCE>(&__ImageBase), std::bind(&FancyZonesApp::DisableModule, this));
 
+    // No PowerToys exit event is watched: turning FancyZones off in PowerToys doesn't end FanciestZones
     m_mainThreadId = GetCurrentThreadId();
-    m_exitEventWaiter.start(CommonSharedConstants::FZE_EXIT_EVENT, [&](DWORD err) {
-        if (err == ERROR_SUCCESS)
-        {
-            DisableModule();
-        }
-    });
-
     InitHooks();
 
     s_instance = this;

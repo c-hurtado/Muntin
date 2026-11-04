@@ -1,121 +1,123 @@
 <p align="center">
-    <picture>
-      <source media="(prefers-color-scheme: light)" srcset="./doc/images/readme/pt-hero.light.png" />
-      <img src="./doc/images/readme/pt-hero.dark.png" />
-  </picture>
+  <img src="doc/fanciestzones/icon.png" alt="FanciestZones icon" width="128" height="128">
 </p>
-<h1 align="center">
-  <span>Microsoft PowerToys</span>
-</h1>
+<h1 align="center">FanciestZones</h1>
+<p align="center">Dock windows by dragging them. Split, swap and scroll the desktop. For Windows 10 and 11.</p>
+
 <p align="center">
-  <span align="center">Microsoft PowerToys is a collection of utilities that help you customize Windows and streamline everyday tasks.</span>
+  <img src="doc/fanciestzones/promo.gif" alt="FanciestZones docking terminal windows, splitting them, moving them with the keyboard and scrolling to a second page" width="800">
 </p>
-<h3 align="center">
-  <a href="#-installation">Installation</a>
-  <span> · </span>
-  <a href="https://aka.ms/powertoys-docs">Documentation</a>
-  <span> · </span>
-  <a href="https://aka.ms/powertoys-releaseblog">Blog</a>
-  <span> · </span>
-  <a href="#-whats-new">Release notes</a>
-</h3>
 
-## 🔨 Utilities
+FanciestZones is a fork of [FancyZones](https://learn.microsoft.com/windows/powertoys/fancyzones) from Microsoft PowerToys. FancyZones snaps windows into zones that you draw in advance. FanciestZones has no zones to draw: you drop a window next to a screen edge or on another window, and the layout builds itself, the way tiling window managers such as [TrellisWM](https://trelliswm.app) (macOS) and Hyprland (Linux) work.
 
-PowerToys includes over 30 utilities to help you customize and optimize your Windows experience:
+It is one small program that runs on its own. You don't need PowerToys.
 
-|   |   |   |
-| --- | --- | --- |
-| [<img src="doc/images/icons/AdvancedPaste.png" alt="Advanced Paste icon" height="16"> Advanced Paste](https://aka.ms/PowerToysOverview_AdvancedPaste) | [<img src="doc/images/icons/Always%20On%20Top.png" alt="Always on Top icon" height="16"> Always on Top](https://aka.ms/PowerToysOverview_AoT) | [<img src="doc/images/icons/Awake.png" alt="Awake icon" height="16"> Awake](https://aka.ms/PowerToysOverview_Awake) |
-| [<img src="doc/images/icons/Color%20Picker.png" alt="Color Picker icon" height="16"> Color Picker](https://aka.ms/PowerToysOverview_ColorPicker) | [<img src="doc/images/icons/Command%20Not%20Found.png" alt="Command Not Found icon" height="16"> Command Not Found](https://aka.ms/PowerToysOverview_CmdNotFound) | [<img src="doc/images/icons/Command Palette.png" alt="Command Palette icon" height="16"> Command Palette](https://aka.ms/PowerToysOverview_CmdPal) |
-| [<img src="doc/images/icons/Crop%20And%20Lock.png" alt="Crop and Lock icon" height="16"> Crop And Lock](https://aka.ms/PowerToysOverview_CropAndLock) | [<img src="doc/images/icons/Environment%20Manager.png" alt="Environment Variables icon" height="16"> Environment Variables](https://aka.ms/PowerToysOverview_EnvironmentVariables) | [<img src="doc/images/icons/FancyZones.png" alt="FancyZones icon" height="16"> FancyZones](https://aka.ms/PowerToysOverview_FancyZones) |
-| [<img src="doc/images/icons/File%20Explorer%20Preview.png" alt="File Explorer Add-ons icon" height="16"> File Explorer Add-ons](https://aka.ms/PowerToysOverview_FileExplorerAddOns) | [<img src="doc/images/icons/File%20Locksmith.png" alt="File Locksmith icon" height="16"> File Locksmith](https://aka.ms/PowerToysOverview_FileLocksmith) | [<img src="doc/images/icons/GrabAndMove.png" alt="Grab And Move icon" height="16"> Grab And Move](https://aka.ms/PowerToysOverview_GrabAndMove) |
-| [<img src="doc/images/icons/Host%20File%20Editor.png" alt="Hosts File Editor icon" height="16"> Hosts File Editor](https://aka.ms/PowerToysOverview_HostsFileEditor) | [<img src="doc/images/icons/Image%20Resizer.png" alt="Image Resizer icon" height="16"> Image Resizer](https://aka.ms/PowerToysOverview_ImageResizer) | [<img src="doc/images/icons/Keyboard%20Manager.png" alt="Keyboard Manager icon" height="16"> Keyboard Manager](https://aka.ms/PowerToysOverview_KeyboardManager) |
-| [<img src="doc/images/icons/Light Switch.png" alt="Light Switch icon" height="16"> Light Switch](https://aka.ms/PowerToysOverview_LightSwitch) | [<img src="doc/images/icons/Find My Mouse.png" alt="Mouse Utilities icon" height="16"> Mouse Utilities](https://aka.ms/PowerToysOverview_MouseUtilities) | [<img src="doc/images/icons/MouseWithoutBorders.png" alt="Mouse Without Borders icon" height="16"> Mouse Without Borders](https://aka.ms/PowerToysOverview_MouseWithoutBorders) |
-| [<img src="doc/images/icons/NewPlus.png" alt="New+ icon" height="16"> New+](https://aka.ms/PowerToysOverview_NewPlus) | [<img src="doc/images/icons/Peek.png" alt="Peek icon" height="16"> Peek](https://aka.ms/PowerToysOverview_Peek) | [<img src="doc/images/icons/PowerDisplay.png" alt="PowerDisplay icon" height="16"> PowerDisplay](https://aka.ms/PowerToysOverview_PowerDisplay) |
-| [<img src="doc/images/icons/PowerRename.png" alt="PowerRename icon" height="16"> PowerRename](https://aka.ms/PowerToysOverview_PowerRename) | [<img src="doc/images/icons/PowerToys%20Run.png" alt="PowerToys Run icon" height="16"> PowerToys Run](https://aka.ms/PowerToysOverview_PowerToysRun) | [<img src="doc/images/icons/PowerAccent.png" alt="Quick Accent icon" height="16"> Quick Accent](https://aka.ms/PowerToysOverview_QuickAccent) |
-| [<img src="doc/images/icons/Registry%20Preview.png" alt="Registry Preview icon" height="16"> Registry Preview](https://aka.ms/PowerToysOverview_RegistryPreview) | [<img src="doc/images/icons/MeasureTool.png" alt="Screen Ruler icon" height="16"> Screen Ruler](https://aka.ms/PowerToysOverview_ScreenRuler) | [<img src="doc/images/icons/Shortcut%20Guide.png" alt="Shortcut Guide icon" height="16"> Shortcut Guide](https://aka.ms/PowerToysOverview_ShortcutGuide) |
-| [<img src="doc/images/icons/PowerOCR.png" alt="Text Extractor icon" height="16"> Text Extractor](https://aka.ms/PowerToysOverview_TextExtractor) | [<img src="doc/images/icons/WindowHopper.png" alt="Window Hopper icon" height="16"> Window Hopper](https://aka.ms/PowerToysOverview_WindowHopper) | [<img src="doc/images/icons/Workspaces.png" alt="Workspaces icon" height="16"> Workspaces](https://aka.ms/PowerToysOverview_Workspaces) |
-| [<img src="doc/images/icons/ZoomIt.png" alt="ZoomIt icon" height="16"> ZoomIt](https://aka.ms/PowerToysOverview_ZoomIt) |   |   |
+> [!NOTE]
+> FanciestZones is a personal project. It is not made, supported or endorsed by Microsoft.
 
-## 📦 Installation
+## What it does
 
-For detailed installation instructions and system requirements, visit the [installation docs](https://learn.microsoft.com/windows/powertoys/install).
+- **Dock by drag.** Hold Shift while you drag a window. Drop it near a screen edge to give it that half of the screen, or on the outer part of a docked window to split that window. Splits nest as deep as you like.
+- **Snap to the side.** Drag a window to the left or right edge of the screen, and it docks there without Shift.
+- **Neighbors follow.** Resize a docked window and its neighbors take the rest. Minimize or close one and the others fill the space; restore it and it goes back to its place.
+- **Move with the keyboard.** Win+arrows move the focus between docked windows. Shift+Win+arrows swap a window with its neighbor, and its neighbors spring to their new places.
+- **Buttons on every window.** Small < > buttons next to the minimize button move a docked window left or right.
+- **Flip and resize.** Win+J turns a split around. Win+plus and Win+minus make a window wider or narrower; add Shift for height.
+- **Scroll the desktop.** Shift+Win+mouse wheel scrolls the windows of a monitor up and down a tall canvas. Every screen-high page of the canvas has its own layout.
+- **Saved layouts.** Save the layout of a monitor to a digit and recall it with a key. Named layouts cover every monitor, and loading one starts the apps that aren't open.
+- **Remembers.** Layouts are kept per monitor and per virtual desktop, and survive a restart. After a reboot, apps go back to their places as you open them.
+- **Settings in the tray.** Right-click the FanciestZones icon in the notification area to turn features on and off.
 
-But to get started quickly, choose one of the installation methods below:
-<br/><br/>
-<details open>
-<summary><strong>Download the .exe file from GitHub</strong></summary>
-<br/>
+## Install
 
-Go to the [PowerToys GitHub releases](https://aka.ms/installPowerToys), scroll down and select **Assets** to reveal the installation files, and choose the one that matches your architecture and install scope. For most devices, that would be _x64 per-user_.
+1. Download `FanciestZones.exe` from the [latest release](https://github.com/c-hurtado/FanciestZones/releases/latest).
+2. Put it in a folder of your own, for example `%LOCALAPPDATA%\FanciestZones`.
+3. Run it. The FanciestZones icon appears in the notification area.
+4. Right-click the icon and choose **Start at sign-in** if you want it to start with Windows.
 
-</details>
+The file isn't signed yet. Windows SmartScreen may warn before the first run: choose **More info**, then **Run anyway**.
 
-<details>
-<summary><strong>Microsoft Store</strong></summary>
-<br/>
-You can easily install PowerToys from the Microsoft Store:
-<p>
-  <a style="text-decoration:none" href="https://aka.ms/getPowertoys">
-    <picture>
-      <source media="(prefers-color-scheme: light)" srcset="doc/images/readme/StoreBadge-dark.png" width="148" />
-      <img src="doc/images/readme/StoreBadge-light.png" width="148" />
-  </picture></a>
-</p>
-</details>
+If PowerToys is installed, turn FancyZones off in PowerToys Settings. FanciestZones won't start while FancyZones of PowerToys runs, because both would move the same windows.
 
-<details>
-<summary><strong>WinGet</strong></summary>
-<br/>
-Download PowerToys from [WinGet](https://github.com/microsoft/winget-cli#installing-the-client). Updating PowerToys via winget will respect the current PowerToys installation scope. To install PowerToys, run the following command from the command line / PowerShell:
+To update, quit FanciestZones from its icon, replace the file, and run it again. To uninstall, quit it, turn off **Start at sign-in** first if it's on, and delete the file and the `%LOCALAPPDATA%\FanciestZones` folder.
 
-- User scope installer (default)
+## Get started
+
+| To | Do this |
+|---|---|
+| Dock a window to half of the screen | Hold **Shift** and drag it near the left, right, top or bottom edge |
+| Dock it without Shift | Drag it all the way to the left or right edge |
+| Split a docked window | Hold **Shift** and drop another window on its outer part |
+| Undock a window | Drag it without Shift |
+| Move the focus | **Win+arrow** keys* |
+| Swap two docked windows | **Shift+Win+arrow** keys* |
+| Turn a split around | **Win+J** |
+| Resize a docked window | **Win+plus**, **Win+minus** (add Shift for height, Alt for small steps, Ctrl for big ones) |
+| Scroll the desktop | **Shift+Win** and the mouse wheel |
+| Save the layout of a monitor | **Win+Ctrl+Alt+Shift+digit** |
+| Recall it | **Win+Ctrl+Alt+digit** |
+| Save a named layout of every monitor | **Save layout...** in the tray menu, or `FanciestZones save MyLayout` in a terminal |
+| Load it | `FanciestZones load MyLayout`, or the **Load layout** menu of the tray icon |
+
+\* Turn on **Win+arrow keys move docked windows** in the tray menu first. They replace the Windows snap keys only on docked windows.
+
+The [full guide](FanciestZones.md) covers every action, the command line and all settings.
+
+## Settings
+
+Right-click the tray icon:
+
+| Menu item | What it does |
+|---|---|
+| Dock only while Shift is held | On: docking needs Shift. Off: every drag docks, and Shift turns docking off. |
+| Dock at the left and right screen edges | A window dragged to the side edge docks there without Shift |
+| Dock new windows by themselves | New windows split the window last in use, as in Hyprland's dwindle layout |
+| Win+arrow keys move docked windows | Win+arrows move the focus, Shift+Win+arrows move windows in the layout |
+| < > buttons on docked windows | Show the buttons next to the caption buttons |
+| Animations | Windows spring to their new places |
+| Zoom out while scrolling the desktop | The scroll zooms out to show the pages stacked |
+| Gap between windows | Space between docked windows |
+| Desktop pages per monitor | How many pages each monitor scrolls through, empty ones included, from 1 (no scrolling) to 4 |
+| Save layout... | Name the windows docked now, on every monitor, and save them |
+| Load layout | Recall a named layout |
+| Start at sign-in | Start FanciestZones with Windows |
+| Open settings folder | Opens `%LOCALAPPDATA%\FanciestZones`, where `settings.json` holds every setting |
+
+FanciestZones keeps its settings and layouts in `%LOCALAPPDATA%\FanciestZones`, apart from PowerToys. The first time it runs, it copies the settings and layouts of an earlier FanciestZones from the PowerToys folder, if there are any.
+
+## What it costs to run
+
+Measured on an AMD Ryzen 7 8700F (8 cores, 16 threads) with Windows 11, FanciestZones running but not in use:
+
+| | Measured |
+|---|---|
+| CPU | 0.4% to 1% of one core, under 0.1% of the whole processor |
+| Memory in use (working set) | 66 to 90 MB |
+| Memory reserved (private bytes) | 137 MB |
+| Threads | 49 to 56 |
+
+The lower figures are with the screen locked, the higher ones while the PC is in use. Most of the memory and threads come from the FancyZones code it is built on; the plan is to cut them by removing the zone engine it no longer uses.
+
+## Build it
+
+FanciestZones builds with Visual Studio 2022 and the **Desktop development with C++** workload. Only the C++ part of the PowerToys code base is needed.
 
 ```powershell
-winget install Microsoft.PowerToys -s winget
+git clone https://github.com/c-hurtado/FanciestZones
+cd FanciestZones
+& "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" `
+  src\modules\fancyzones\FancyZones\FancyZones.vcxproj -restore -p:RestorePackagesConfig=true `
+  -p:Platform=x64 -p:Configuration=Release "-p:SolutionDir=$PWD\\" -m
 ```
 
-- Machine-wide scope installer
+The program is `x64\Release\FanciestZones.exe`, one file with nothing to install beside it. See [the guide](FanciestZones.md#rebuild-it) for the unit tests and the live test.
 
-```powershell
-winget install --scope machine Microsoft.PowerToys -s winget
-```
-</details>
+## Privacy
 
-<details>
-<summary><strong>Other methods</strong></summary>
-<br/>
-There are [community driven install methods](https://learn.microsoft.com/windows/powertoys/install#community-driven-install-tools) such as Chocolatey and Scoop. If these are your preferred install solutions, you can find the install instructions there.
-</details>
+FanciestZones collects no data and sends nothing anywhere. The PowerToys telemetry is left out of it. It writes a log on your computer, in `%LOCALAPPDATA%\FanciestZones\Logs`.
 
-## ✨ What's new?
+## License and credits
 
-[![What's new image](doc/images/readme/Release-Banner.png)](https://github.com/microsoft/PowerToys/releases)
+FanciestZones is released under the [MIT License](LICENSE), like PowerToys, which it is based on. The PowerToys code is Copyright (c) Microsoft Corporation. The program includes [spdlog](https://github.com/gabime/spdlog) and [{fmt}](https://github.com/fmtlib/fmt) (MIT), and builds on the [Windows Implementation Libraries](https://github.com/microsoft/wil) and [C++/WinRT](https://github.com/microsoft/cppwinrt) (MIT). Their notices are in [NOTICE.md](NOTICE.md).
 
-To see what's new, check out the [release notes](https://github.com/microsoft/PowerToys/releases/).
-
-## 🛣️ Roadmap
-
-For [v0.102][github-next-release-work], we're working on modernizing several utilities with WinUI 3, expanding Command Palette with tabs and JavaScript/TypeScript extensions, and adding new productivity improvements across PowerToys.
-
-## ❤️ PowerToys Community
-
-The PowerToys team is extremely grateful to have the [support of an amazing active community][community-link]. The work you do is incredibly important. PowerToys wouldn't be nearly what it is today without your help filing bugs, updating documentation, guiding the design, or writing features. We want to say thank you and take time to recognize your work. Your contributions and feedback improve PowerToys month after month!
-
-## Contributing
-
-This project welcomes contributions of all types. Besides coding features / bug fixes, other ways to assist include spec writing, design, documentation, and finding bugs. We are excited to work with the power user community to build a set of tools for helping you get the most out of Windows. We ask that **before you start work on a feature that you would like to contribute**, please read our [Contributor's Guide](CONTRIBUTING.md). We would be happy to work with you to figure out the best approach, provide guidance and mentorship throughout feature development, and help avoid any wasted or duplicate effort. Most contributions require you to agree to a [Contributor License Agreement (CLA)][oss-CLA] declaring that you grant us the rights to use your contribution and that you have permission to do so. For guidance on developing for PowerToys, please read the [developer docs](./doc/devdocs) for a detailed breakdown. This includes how to setup your computer to compile.
-
-## Code of conduct
-
-This project has adopted the [Microsoft Open Source Code of Conduct][oss-conduct-code].
-
-## Privacy statement
-
-The application logs basic diagnostic data (telemetry). For more privacy information and what we collect, see our [PowerToys Data and Privacy documentation](https://aka.ms/powertoys-data-and-privacy-documentation).
-
-[oss-CLA]: https://cla.opensource.microsoft.com
-[oss-conduct-code]: CODE_OF_CONDUCT.md
-[community-link]: COMMUNITY.md
-[github-next-release-work]: https://github.com/microsoft/PowerToys/milestone/46
+Microsoft, Windows and PowerToys are trademarks of the Microsoft group of companies. FanciestZones is not affiliated with Microsoft. The rest of this repository is the PowerToys code base that FanciestZones is built from; the FanciestZones code is in [`src/modules/fancyzones`](src/modules/fancyzones).

@@ -215,6 +215,28 @@ namespace
 
         return true;
     }
+
+    // Removes the empty slots that aren't kept for an app. Their neighbors take the space.
+    void DropOpenSlots(std::unique_ptr<Node>& slot)
+    {
+        if (slot->IsLeaf())
+        {
+            if (IsEmptySlot(*slot) && slot->app.empty())
+            {
+                slot.reset();
+            }
+
+            return;
+        }
+
+        DropOpenSlots(slot->first);
+        DropOpenSlots(slot->second);
+        if (!slot->first || !slot->second)
+        {
+            const bool none = !slot->first && !slot->second;
+            slot = none ? nullptr : std::move(slot->first ? slot->first : slot->second);
+        }
+    }
 }
 
 Tree Tree::Clone() const
@@ -366,6 +388,13 @@ void Tree::Insert(HWND window, const std::wstring& app, const Target& target)
         target.node->hidden = false;
         target.node->placedAt = 0;
         return;
+    }
+
+    // A window docked against the whole work area leaves no hole: without this, the empty half next to the first window would stay
+    // as a quarter of the screen that nothing uses. With only hidden windows the slot stays, and they keep their place for when they return.
+    if (!target.node && root && Occupies(*root))
+    {
+        DropOpenSlots(root);
     }
 
     // Docked windows that are all hidden (minimized, closed to the tray) would give the window the whole work area:

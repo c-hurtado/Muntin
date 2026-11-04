@@ -79,10 +79,12 @@ public:
         return static_cast<LONG>(std::floor((static_cast<double>(canvasTop) + windowHeight / 2.0) / pageHeight));
     }
 
-    // How far a monitor scrolls: to the first page past its lowest window, which is empty
-    static double ScrollLimit(LONG lowestBottom, LONG pageHeight) noexcept
+    // How far a monitor scrolls: to the last of maxPages pages, empty or not, or further to the page of a window left
+    // below them when the limit was lowered
+    static double ScrollLimit(LONG lowestBottom, LONG pageHeight, int maxPages) noexcept
     {
-        return (std::max)(1.0, std::ceil(static_cast<double>(lowestBottom) / pageHeight)) * pageHeight;
+        const double pagesUsed = std::ceil(static_cast<double>(lowestBottom) / pageHeight);
+        return (std::max)(maxPages - 1.0, pagesUsed - 1.0) * pageHeight;
     }
 
 private:

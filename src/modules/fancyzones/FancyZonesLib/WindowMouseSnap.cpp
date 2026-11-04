@@ -4,6 +4,7 @@
 #include <FancyZonesLib/FancyZonesWindowProcessing.h>
 #include <FancyZonesLib/FancyZonesWindowProperties.h>
 #include <FancyZonesLib/Settings.h>
+#include <FancyZonesLib/Tray.h>
 #include <FancyZonesLib/WindowUtils.h>
 #include <FancyZonesLib/WorkArea.h>
 
@@ -24,7 +25,7 @@ WindowMouseSnap::~WindowMouseSnap()
     ResetWindowTransparency();
 }
 
-std::unique_ptr<WindowMouseSnap> WindowMouseSnap::Create(HWND window, const std::unordered_map<HMONITOR, std::unique_ptr<WorkArea>>& activeWorkAreas, notifications::NotificationUtil* notificationUtil)
+std::unique_ptr<WindowMouseSnap> WindowMouseSnap::Create(HWND window, const std::unordered_map<HMONITOR, std::unique_ptr<WorkArea>>& activeWorkAreas)
 {
     if (FancyZonesWindowUtils::IsCursorTypeIndicatingSizeEvent() || !FancyZonesWindowProcessing::IsProcessableManually(window))
     {
@@ -33,13 +34,11 @@ std::unique_ptr<WindowMouseSnap> WindowMouseSnap::Create(HWND window, const std:
 
     if (!is_process_elevated() && IsProcessOfWindowElevated(window))
     {
-        if (notificationUtil != nullptr)
+        // Said once per run, for the first such window. Not used up while the tray icon isn't there yet.
+        static bool told = false;
+        if (!told)
         {
-            // Notifies user if unable to drag elevated window
-            notificationUtil->WarnIfElevationIsRequired(GET_RESOURCE_STRING(IDS_FANCYZONES),
-                                                        GET_RESOURCE_STRING(IDS_CANT_DRAG_ELEVATED),
-                                                        GET_RESOURCE_STRING(IDS_CANT_DRAG_ELEVATED_LEARN_MORE),
-                                                        GET_RESOURCE_STRING(IDS_CANT_DRAG_ELEVATED_DIALOG_DONT_SHOW_AGAIN));
+            told = Tray::Notify(GET_RESOURCE_STRING(IDS_CANT_DRAG_ELEVATED).c_str());
         }
 
         return nullptr;
