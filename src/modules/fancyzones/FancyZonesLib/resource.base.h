@@ -5,9 +5,9 @@
 //////////////////////////////
 // Non-localizable
 
-#define FILE_DESCRIPTION "FanciestZones"
-#define INTERNAL_NAME "FanciestZones"
-#define ORIGINAL_FILENAME "FanciestZones.exe"
+#define FILE_DESCRIPTION "Muntin"
+#define INTERNAL_NAME "Muntin"
+#define ORIGINAL_FILENAME "Muntin.exe"
 
 // Non-localizable
 //////////////////////////////

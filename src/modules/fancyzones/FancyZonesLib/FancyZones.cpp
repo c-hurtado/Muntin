@@ -517,7 +517,7 @@ FancyZones::Run() noexcept
         return;
     }
 
-    // "FanciestZones.exe load <name>" from a shortcut works when this instance runs as administrator too. The handler checks its input.
+    // "Muntin.exe load <name>" from a shortcut works when this instance runs as administrator too. The handler checks its input.
     ChangeWindowMessageFilterEx(m_window, WM_COPYDATA, MSGFLT_ALLOW, nullptr);
 
     m_captionButtons = std::make_unique<DockCaptionButtons::Overlays>(m_hinstance, [this](HWND window, Dock::Edge edge) {
@@ -1127,7 +1127,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
     case WM_COPYDATA:
     {
-        // A command from FanciestZones.exe started with arguments, see main.cpp
+        // A command from Muntin.exe started with arguments, see main.cpp
         const auto data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
         if (!data || data->dwData != DockCommands::CopyDataId || !data->lpData || data->cbData % sizeof(wchar_t) != 0 || data->cbData > 4096)
         {
@@ -2569,7 +2569,7 @@ void FancyZones::DockLoad(std::wstring name) noexcept
     const bool launch = !is_process_elevated();
     if (!launch)
     {
-        Logger::warn(L"Layout {}: FanciestZones runs as administrator, apps that aren't open are not started", name);
+        Logger::warn(L"Layout {}: Muntin runs as administrator, apps that aren't open are not started", name);
     }
 
     const auto now = GetTickCount64();

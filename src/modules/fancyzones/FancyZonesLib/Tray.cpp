@@ -13,8 +13,8 @@
 
 namespace
 {
-    constexpr wchar_t WindowClassName[] = L"FanciestZonesTray";
-    constexpr wchar_t HelpUrl[] = L"https://github.com/c-hurtado/FanciestZones#readme";
+    constexpr wchar_t WindowClassName[] = L"MuntinTray";
+    constexpr wchar_t HelpUrl[] = L"https://github.com/c-hurtado/Muntin#readme";
     constexpr UINT IconId = 1;
     constexpr UINT WM_TRAY = WM_APP + 1;
 
@@ -65,7 +65,7 @@ namespace
     bool AddIcon() noexcept
     {
         NOTIFYICONDATAW data{ .cbSize = sizeof(NOTIFYICONDATAW), .hWnd = s_window, .uID = IconId, .uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP, .uCallbackMessage = WM_TRAY, .hIcon = s_icon };
-        wcscpy_s(data.szTip, L"FanciestZones");
+        wcscpy_s(data.szTip, L"Muntin");
         if (!Shell_NotifyIconW(NIM_ADD, &data))
         {
             return false;
@@ -79,7 +79,7 @@ namespace
     std::wstring StartupShortcut()
     {
         wil::unique_cotaskmem_string folder;
-        return SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Startup, 0, nullptr, &folder)) ? std::wstring{ folder.get() } + L"\\FanciestZones.lnk" : std::wstring{};
+        return SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Startup, 0, nullptr, &folder)) ? std::wstring{ folder.get() } + L"\\Muntin.lnk" : std::wstring{};
     }
 
     void SetStartAtSignIn(bool start) noexcept
@@ -122,7 +122,7 @@ namespace
         return names;
     }
 
-    // The same command as "FanciestZones.exe load <name>", see main.cpp
+    // The same command as "Muntin.exe load <name>", see main.cpp
     void LoadLayout(const std::wstring& name) noexcept
     {
         if (const HWND fancyZones = FindWindowW(DockCommands::WindowClassName, nullptr))
@@ -218,7 +218,7 @@ namespace
         return name;
     }
 
-    // Runs "FanciestZones.exe save <name>", which also makes the Start menu shortcut, see main.cpp. Names can't hold quotes.
+    // Runs "Muntin.exe save <name>", which also makes the Start menu shortcut, see main.cpp. Names can't hold quotes.
     void SaveLayout()
     {
         const auto name = AskLayoutName();
@@ -229,7 +229,7 @@ namespace
 
         const auto existing = LayoutNames(); // Read now: the dialog can stay open a long time
         const bool taken = std::any_of(existing.begin(), existing.end(), [&](const std::wstring& other) { return _wcsicmp(other.c_str(), name.c_str()) == 0; });
-        if (taken && MessageBoxW(s_window, (L"Replace the layout " + name + L"?").c_str(), L"FanciestZones", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES)
+        if (taken && MessageBoxW(s_window, (L"Replace the layout " + name + L"?").c_str(), L"Muntin", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES)
         {
             return;
         }
@@ -262,7 +262,7 @@ namespace
         const bool startsAtSignIn = !startup.empty() && GetFileAttributesW(startup.c_str()) != INVALID_FILE_ATTRIBUTES;
 
         HMENU menu = CreatePopupMenu();
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"FanciestZones");
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"Muntin");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         for (size_t i = 0; i < std::size(Toggles); ++i)
         {
@@ -386,7 +386,7 @@ void Tray::Start(HINSTANCE instance, bool welcome) noexcept
     RegisterClassExW(&wcex);
 
     // A hidden top-level window rather than a message-only one, which wouldn't hear about TaskbarCreated
-    s_window = CreateWindowExW(WS_EX_TOOLWINDOW, WindowClassName, L"FanciestZones", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
+    s_window = CreateWindowExW(WS_EX_TOOLWINDOW, WindowClassName, L"Muntin", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
 
     // Run as administrator, the window would otherwise not hear from Explorer
     ChangeWindowMessageFilterEx(s_window, s_taskbarCreated, MSGFLT_ALLOW, nullptr);
@@ -401,7 +401,7 @@ void Tray::Start(HINSTANCE instance, bool welcome) noexcept
     if (welcome)
     {
         NOTIFYICONDATAW data{ .cbSize = sizeof(NOTIFYICONDATAW), .hWnd = s_window, .uID = IconId, .uFlags = NIF_INFO };
-        wcscpy_s(data.szInfoTitle, L"FanciestZones is running");
+        wcscpy_s(data.szInfoTitle, L"Muntin is running");
         wcscpy_s(data.szInfo, L"Hold Shift while you drag a window to dock it. Right-click this icon for settings.");
         data.dwInfoFlags = NIIF_INFO;
         Shell_NotifyIconW(NIM_MODIFY, &data);
@@ -436,7 +436,7 @@ bool Tray::Notify(const wchar_t* text) noexcept
     }
 
     NOTIFYICONDATAW data{ .cbSize = sizeof(NOTIFYICONDATAW), .hWnd = window, .uID = IconId, .uFlags = NIF_INFO };
-    wcscpy_s(data.szInfoTitle, L"FanciestZones");
+    wcscpy_s(data.szInfoTitle, L"Muntin");
     wcsncpy_s(data.szInfo, text, _TRUNCATE);
     data.dwInfoFlags = NIIF_INFO;
     return Shell_NotifyIconW(NIM_MODIFY, &data);

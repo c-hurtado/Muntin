@@ -1,5 +1,5 @@
 # Live check of the dock fork: drives real test windows with synthetic mouse and keyboard input.
-param([string]$Exe = "$env:LOCALAPPDATA\FanciestZones\FanciestZones.exe", [switch]$NoInput,
+param([string]$Exe = "$env:LOCALAPPDATA\Muntin\Muntin.exe", [switch]$NoInput,
     # 0: the primary monitor, 1: the other one
     [int]$Monitor = 0,
     # Sections to run, all of them when empty: dock, resize, slots, monitors, keys, close.

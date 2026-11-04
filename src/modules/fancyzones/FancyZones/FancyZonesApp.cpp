@@ -20,7 +20,7 @@ FancyZonesApp::FancyZonesApp(const std::wstring& appName, const std::wstring& ap
     InitializeWinhookEventIds();
     m_app = MakeFancyZones(reinterpret_cast<HINSTANCE>(&__ImageBase), std::bind(&FancyZonesApp::DisableModule, this));
 
-    // No PowerToys exit event is watched: turning FancyZones off in PowerToys doesn't end FanciestZones
+    // No PowerToys exit event is watched: turning FancyZones off in PowerToys doesn't end Muntin
     m_mainThreadId = GetCurrentThreadId();
     InitHooks();
 

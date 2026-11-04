@@ -218,7 +218,7 @@
     <comment>FancyZones is a product name, keep as is.</comment>
   </data>
   <data name="Cant_Drag_Elevated" xml:space="preserve">
-    <value>This window belongs to an app that runs as administrator. FanciestZones can dock it only when FanciestZones runs as administrator too.</value>
+    <value>This window belongs to an app that runs as administrator. Muntin can dock it only when Muntin runs as administrator too.</value>
     <comment>administrator is context of user account.</comment>
   </data>
   <data name="Cant_Drag_Elevated_Learn_More" xml:space="preserve">
@@ -235,7 +235,7 @@
     <comment>Windows refers to the Operating system</comment>
   </data>
   <data name="Powertoys_FancyZones" xml:space="preserve">
-    <value>FanciestZones</value>
+    <value>Muntin</value>
     <comment>do not loc.  Both are product names</comment>
   </data>
   <data name="Span_Across_Zones_Warning" xml:space="preserve">

@@ -24,8 +24,8 @@
 
 namespace
 {
-    constexpr wchar_t WindowClassName[] = L"FanciestZonesDesktopScroll";
-    constexpr wchar_t BorderClassName[] = L"FanciestZonesDesktopScrollBorder";
+    constexpr wchar_t WindowClassName[] = L"MuntinDesktopScroll";
+    constexpr wchar_t BorderClassName[] = L"MuntinDesktopScrollBorder";
 
     constexpr UINT WM_SCROLL_WHEEL = WM_APP + 1; // wparam: wheel delta, lparam: cursor
     constexpr UINT WM_SCROLL_FOLLOW = WM_APP + 2; // wparam: the window that became the foreground window

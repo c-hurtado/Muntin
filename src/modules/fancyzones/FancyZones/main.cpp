@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 
 #include <common/utils/window.h>
 #include <common/utils/UnhandledExceptionHandler.h>
@@ -32,12 +32,12 @@
 // Non-localizable
 const std::wstring moduleName = L"FancyZones";
 const std::wstring internalPath = L"";
-const std::wstring instanceMutexName = L"Local\\FanciestZones_InstanceMutex";
+const std::wstring instanceMutexName = L"Local\\Muntin_InstanceMutex";
 const std::wstring stockMutexName = L"Local\\PowerToys_FancyZones_InstanceMutex"; // FancyZones of PowerToys, which can't run alongside
 
 namespace
 {
-    constexpr wchar_t Usage[] = L"Usage: FanciestZones.exe list | save <name> | load <name> | delete <name> | restart\n"
+    constexpr wchar_t Usage[] = L"Usage: Muntin.exe list | save <name> | load <name> | delete <name> | restart\n"
                                 L"A name has at most 100 characters and none of \\ / : * ? \" < > | %\n";
 
     // A GUI app has no console of its own: write to the redirected output, or to the console of the shell that started it
@@ -71,7 +71,7 @@ namespace
     // Builds before November 2026 kept their files with those of PowerToys FancyZones. They are copied over once, never
     // over a file that is already there, and a marker file says it was done: deleting the layouts later to start afresh
     // doesn't bring the old ones back. The originals stay, PowerToys may still use them.
-    // Returns true on the first run ever: no layouts here, and none from an earlier FanciestZones either.
+    // Returns true on the first run ever: no layouts here, and none from an earlier build either.
     bool TakeOverPowerToysFiles()
     {
         namespace fs = std::filesystem;
@@ -94,7 +94,7 @@ namespace
                 fs::copy_file(old / name, folder / name, fs::copy_options::skip_existing, error);
             }
 
-            // Only an earlier FanciestZones writes this one: where scrolled windows belong, after a crash. Moved, so that it is used once.
+            // Only an earlier build writes this one: where scrolled windows belong, after a crash. Moved, so that it is used once.
             if (!fs::exists(folder / L"desktop-scroll.txt", error))
             {
                 fs::rename(old / L"desktop-scroll.txt", folder / L"desktop-scroll.txt", error);
@@ -121,7 +121,7 @@ namespace
         return names;
     }
 
-    // FanciestZones.exe list | save|load|delete <name>: "<verb>\n<name>" for the running instance, see FancyZones::DockCommand
+    // Muntin.exe list | save|load|delete <name>: "<verb>\n<name>" for the running instance, see FancyZones::DockCommand
     std::optional<std::pair<std::wstring, std::wstring>> DockCommandFromCommandLine()
     {
         int count = 0;
@@ -202,7 +202,7 @@ namespace
             return;
         }
 
-        const std::wstring folder = std::wstring{ programs.get() } + L"\\FanciestZones";
+        const std::wstring folder = std::wstring{ programs.get() } + L"\\Muntin";
         const std::wstring path = folder + L"\\" + name + L".lnk";
         if (verb == L"delete")
         {
@@ -222,7 +222,7 @@ namespace
 
         link->SetPath(exe);
         link->SetArguments((L"load \"" + name + L"\"").c_str());
-        link->SetDescription((L"FanciestZones layout " + name).c_str());
+        link->SetDescription((L"Muntin layout " + name).c_str());
         link->SetIconLocation(exe, 0);
         const auto file = link.try_as<IPersistFile>();
         if (!file || FAILED(file->Save(path.c_str(), TRUE)))
@@ -259,7 +259,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         HWND running = FindWindowW(DockCommands::WindowClassName, nullptr);
         if (verb == L"restart" && running && !EndInstance(running))
         {
-            Print(L"Couldn't end the running FanciestZones\n");
+            Print(L"Couldn't end the running Muntin\n");
             return 1;
         }
 
@@ -268,7 +268,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
             running = StartInstance();
             if (!running)
             {
-                Print(L"FanciestZones didn't start\n");
+                Print(L"Muntin didn't start\n");
                 return 1;
             }
 
@@ -280,7 +280,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
         if (!running)
         {
-            Print(L"FanciestZones isn't running\n");
+            Print(L"Muntin isn't running\n");
             return 1;
         }
 
@@ -306,7 +306,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     if (GetLastError() == ERROR_ALREADY_EXISTS)
     {
-        Logger::warn(L"FanciestZones is already running");
+        Logger::warn(L"Muntin is already running");
         return 0;
     }
 
@@ -315,11 +315,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     wil::unique_handle stock{ OpenMutexW(SYNCHRONIZE, FALSE, stockMutexName.c_str()) };
     if (stock || GetLastError() == ERROR_ACCESS_DENIED)
     {
-        MessageBoxW(nullptr, L"FancyZones of PowerToys is running, and the two can't run together. Turn FancyZones off in PowerToys Settings, then start FanciestZones again.", L"FanciestZones", MB_OK | MB_ICONWARNING);
+        MessageBoxW(nullptr, L"FancyZones of PowerToys is running, and the two can't run together. Turn FancyZones off in PowerToys Settings, then start Muntin again.", L"Muntin", MB_OK | MB_ICONWARNING);
         return 0;
     }
 
-    // Holding the lock of stock FancyZones keeps it from starting while FanciestZones runs
+    // Holding the lock of stock FancyZones keeps it from starting while Muntin runs
     wil::unique_handle stockBlock{ CreateMutexW(nullptr, FALSE, stockMutexName.c_str()) };
 
     // After the checks, so that a run that gave up doesn't use up the welcome

@@ -17,7 +17,7 @@
 
 namespace
 {
-    constexpr wchar_t WindowClassName[] = L"FanciestZonesDockMotion";
+    constexpr wchar_t WindowClassName[] = L"MuntinDockMotion";
 
     constexpr UINT WM_MOTION_HOLD = WM_APP + 1; // lparam: the windows
     constexpr UINT WM_MOTION_RELEASE = WM_APP + 2; // wparam: whether any window moved

@@ -41,7 +41,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (SavingASettingKeepsTheOthers)
         {
-            const auto file = (std::filesystem::temp_directory_path() / L"fanciestzones-test-settings.json").wstring(); // Never the real settings
+            const auto file = (std::filesystem::temp_directory_path() / L"muntin-test-settings.json").wstring(); // Never the real settings
             json::to_file(file, json::JsonObject::Parse(LR"({"properties":{"fancyzones_dockGap":{"value":12}},"name":"FancyZones","version":"1.0"})"));
 
             FancyZonesSettings::SaveValue(NonLocalizable::DesktopScrollPagesID, json::value(3), file);
@@ -54,7 +54,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (SavingASettingWithoutAFileMakesOne)
         {
-            const auto file = (std::filesystem::temp_directory_path() / L"fanciestzones-test-settings.json").wstring();
+            const auto file = (std::filesystem::temp_directory_path() / L"muntin-test-settings.json").wstring();
             DeleteFileW(file.c_str());
 
             FancyZonesSettings::SaveValue(NonLocalizable::ShiftDragID, json::value(false), file);
@@ -67,7 +67,7 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (SavingASettingLeavesAnUnreadableFileAlone)
         {
-            const auto file = (std::filesystem::temp_directory_path() / L"fanciestzones-test-settings.json").wstring();
+            const auto file = (std::filesystem::temp_directory_path() / L"muntin-test-settings.json").wstring();
             const std::string broken = R"({"properties":{"fancyzones_dockGap":{"value":12}},)";
             std::ofstream{ file, std::ios::binary } << broken;
 

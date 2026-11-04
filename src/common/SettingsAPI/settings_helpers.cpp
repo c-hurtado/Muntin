@@ -11,7 +11,7 @@ namespace PTSettingsHelper
     constexpr inline const wchar_t* DataDiagnosticsRegKey = L"Software\\Classes\\PowerToys";
     constexpr inline const wchar_t* DataDiagnosticsRegValueName = L"AllowDataDiagnostics";
 
-    // FanciestZones keeps its files in a folder of its own, %LOCALAPPDATA%\FanciestZones, apart from PowerToys
+    // Muntin keeps its files in a folder of its own, %LOCALAPPDATA%\Muntin, apart from PowerToys
     std::wstring get_root_save_folder_location()
     {
         PWSTR local_app_path;
@@ -19,7 +19,7 @@ namespace PTSettingsHelper
         std::wstring result{ local_app_path };
         CoTaskMemFree(local_app_path);
 
-        result += L"\\FanciestZones";
+        result += L"\\Muntin";
         std::filesystem::path save_path(result);
         if (!std::filesystem::exists(save_path))
         {
@@ -44,7 +44,7 @@ namespace PTSettingsHelper
         return result;
     }
 
-    // FanciestZones has one module: its files are right in the root folder
+    // Muntin has one module: its files are right in the root folder
     std::wstring get_module_save_folder_location(std::wstring_view)
     {
         return get_root_save_folder_location();

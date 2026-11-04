@@ -1,15 +1,15 @@
 name: Bug
-description: Something in FanciestZones doesn't work as it should
+description: Something in Muntin doesn't work as it should
 labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: FanciestZones is not made by Microsoft. Report FanciestZones problems here, not to PowerToys.
+      value: Muntin is not made by Microsoft. Report Muntin problems here, not to PowerToys.
   - type: input
     id: version
     attributes:
       label: Version
-      description: Right-click FanciestZones.exe, Properties, Details, Product version
+      description: Right-click Muntin.exe, Properties, Details, Product version
       placeholder: 0.1.0.0
     validations:
       required: true

@@ -31,10 +31,10 @@ namespace NonLocalizable
 
 namespace DockCommands
 {
-    // FanciestZones.exe save|load|delete <name> sends "<verb>\n<name>" to the running instance with WM_COPYDATA
+    // Muntin.exe save|load|delete <name> sends "<verb>\n<name>" to the running instance with WM_COPYDATA
     constexpr ULONG_PTR CopyDataId = 0x465A4443;
     // Class of the main window of the running instance. Not the class of stock FancyZones, which may run too.
-    constexpr wchar_t WindowClassName[] = L"FanciestZones";
+    constexpr wchar_t WindowClassName[] = L"Muntin";
 
     // A layout name is also the name of a Start menu shortcut file, and shell arguments expand %
     inline bool IsValidName(const std::wstring& name) noexcept
@@ -109,7 +109,7 @@ public:
     bool DeleteNamed(const std::wstring& name);
     std::map<std::wstring, Dock::Tree> Named(const std::wstring& name) const;
 
-    // Each scroll page of a work area has its own layout, kept only while FanciestZones runs. The saved layout is the one of page 0.
+    // Each scroll page of a work area has its own layout, kept only while Muntin runs. The saved layout is the one of page 0.
     void SwitchPage(const FancyZonesDataTypes::WorkAreaId& id, int page);
     int Page(const FancyZonesDataTypes::WorkAreaId& id) const;
     void SwitchPagesHome();

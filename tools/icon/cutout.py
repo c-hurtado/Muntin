@@ -1,4 +1,4 @@
-"""Cuts the flat background out of the generated FanciestZones icon art.
+"""Cuts the flat background out of the generated Muntin icon art.
 
 python cutout.py <source.png> <out-dir>
 

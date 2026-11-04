@@ -6,7 +6,7 @@
 
 namespace
 {
-    const wchar_t WindowClassName[] = L"FanciestZones_DockCaptionButtons";
+    const wchar_t WindowClassName[] = L"Muntin_DockCaptionButtons";
 
     // Caption button size of a window at 100% scale
     constexpr int ButtonWidth = 46;
