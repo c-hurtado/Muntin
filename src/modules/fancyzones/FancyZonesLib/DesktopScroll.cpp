@@ -26,6 +26,7 @@ namespace
 {
     constexpr wchar_t WindowClassName[] = L"MuntinDesktopScroll";
     constexpr wchar_t BorderClassName[] = L"MuntinDesktopScrollBorder";
+    constexpr wchar_t ShadeClassName[] = L"MuntinDesktopScrollShade";
 
     constexpr UINT WM_SCROLL_WHEEL = WM_APP + 1; // wparam: wheel delta, lparam: cursor
     constexpr UINT WM_SCROLL_FOLLOW = WM_APP + 2; // wparam: the window that became the foreground window
@@ -45,6 +46,7 @@ namespace
     constexpr double BorderMargin = 16; // Between the border and the windows, with the overview fully open
     constexpr double BorderOpacity = 51; // Of 255, with the overview fully open
     constexpr LONG BorderRadius = 24;
+    constexpr double ShadeOpacity = 90; // Of 255, with the overview fully open: darkens the desktop around the border
     constexpr ULONGLONG LandMillis = 150; // A window that doesn't respond by then arrives when it can
     constexpr BYTE MaskKey = 0xE8; // Unassigned. A key between Win down and Win up stops Win from opening Start.
 
@@ -264,6 +266,11 @@ struct DesktopScroll::Impl
         borderClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
         borderClass.lpszClassName = BorderClassName;
         RegisterClassExW(&borderClass);
+
+        WNDCLASSEXW shadeClass = borderClass;
+        shadeClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        shadeClass.lpszClassName = ShadeClassName;
+        RegisterClassExW(&shadeClass);
 
         // Top level and never shown: it receives WM_DISPLAYCHANGE
         window = CreateWindowExW(WS_EX_TOOLWINDOW, WindowClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
@@ -658,6 +665,15 @@ struct DesktopScroll::Impl
             UpdateWindow(border);
         }
 
+        // Below the border, outside it
+        const HWND shade = border ? CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, ShadeClassName, L"", WS_POPUP, work.left, work.top, work.right - work.left, work.bottom - work.top, nullptr, nullptr, instance, nullptr) : nullptr;
+        if (shade)
+        {
+            SetLayeredWindowAttributes(shade, 0, 0, LWA_ALPHA);
+            ShowWindow(shade, SW_SHOWNOACTIVATE);
+            UpdateWindow(shade);
+        }
+
         RECT borderDrawn{};
         BYTE borderOpacityDrawn{};
         const double middle = (static_cast<double>(info.rcMonitor.left) + info.rcMonitor.right) / 2;
@@ -710,6 +726,15 @@ struct DesktopScroll::Impl
                 SetWindowRgn(border, ring, FALSE); // The window owns it now
                 SetLayeredWindowAttributes(border, 0, borderOpacity, LWA_ALPHA);
                 SetWindowPos(border, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                if (shade)
+                {
+                    const HRGN outside = CreateRectRgn(0, 0, work.right - work.left, work.bottom - work.top);
+                    const HRGN pages = CreateRoundRectRgn(left, top, right + 1, bottom + 1, BorderRadius * 2, BorderRadius * 2);
+                    CombineRgn(outside, outside, pages, RGN_DIFF);
+                    DeleteObject(pages);
+                    SetWindowRgn(shade, outside, FALSE);
+                    SetLayeredWindowAttributes(shade, 0, static_cast<BYTE>(std::lround(ShadeOpacity * opened)), LWA_ALPHA);
+                }
             }
         };
 
@@ -824,6 +849,11 @@ struct DesktopScroll::Impl
         for (const auto& thumbnail : thumbnails)
         {
             DwmUnregisterThumbnail(thumbnail.id);
+        }
+
+        if (shade)
+        {
+            DestroyWindow(shade);
         }
 
         if (border)
