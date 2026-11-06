@@ -705,6 +705,77 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(tree.Expand(reinterpret_cast<HWND>(5), L"", m_area, 0));
         }
 
+        TEST_METHOD (ExpandGoesUpAsFarAsTheSpaceIsEmpty)
+        {
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 450, 400 });
+            tree.Find(m_a)->window = nullptr;
+            tree.Find(m_b)->window = nullptr;
+
+            Assert::IsTrue(tree.Expand(m_c, L"", m_area, 0));
+            CustomAssert::AreEqual(RECT{ 0, 0, 1000, 800 }, RectOf(tree, m_c));
+            Assert::AreEqual(size_t{ 1 }, tree.Leaves().size());
+        }
+
+        TEST_METHOD (ExpandWidensTheWholeColumn)
+        {
+            // a above c on the left, the right half empty: a binary split can't widen a alone
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 250, 700 });
+            tree.Find(m_b)->window = nullptr;
+
+            Assert::IsTrue(tree.Expand(m_a, L"", m_area, 0));
+            CustomAssert::AreEqual(RECT{ 0, 0, 1000, 400 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, RectOf(tree, m_c));
+        }
+
+        TEST_METHOD (ExpandLeavesTheSpaceOfAHiddenWindow)
+        {
+            auto tree = SideBySide();
+            tree.Find(m_b)->hidden = true;
+
+            Assert::IsFalse(tree.Expand(m_a, L"", m_area, 0));
+            Assert::IsNotNull(tree.Find(m_b));
+        }
+
+        TEST_METHOD (ExpandOfAFloatingWindowPrefersAnOpenSlot)
+        {
+            // Top right kept for an app, bottom left open, both as large
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 750, 700 });
+            const auto x = reinterpret_cast<HWND>(5);
+            DockAt(tree, x, { 250, 700 });
+            tree.Find(m_b)->app = L"kept.exe";
+            tree.Find(m_b)->window = nullptr;
+            tree.Find(x)->window = nullptr;
+
+            const auto d = reinterpret_cast<HWND>(4);
+            Assert::IsTrue(tree.Expand(d, L"", m_area, 0));
+            CustomAssert::AreEqual(RECT{ 0, 400, 500, 800 }, RectOf(tree, d));
+            CustomAssert::AreEqual(RECT{ 500, 400, 1000, 800 }, RectOf(tree, m_c));
+        }
+
+        TEST_METHOD (DockingAtAnEdgeWithOnlyHiddenWindowsTakesTheArea)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            tree.Find(m_a)->hidden = true;
+
+            tree.InsertAtEdge(m_c, L"", m_area, 0, Dock::Edge::Right);
+            CustomAssert::AreEqual(RECT{ 0, 0, 1000, 800 }, RectOf(tree, m_c));
+            Assert::IsNotNull(tree.Find(m_a));
+        }
+
+        TEST_METHOD (DockingAtTheBottomFillsTheEmptySlotThere)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 500, 10 });
+
+            tree.InsertAtEdge(m_c, L"", m_area, 0, Dock::Edge::Bottom);
+            CustomAssert::AreEqual(RECT{ 0, 0, 1000, 400 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, RectOf(tree, m_c));
+        }
+
         TEST_METHOD (DockingAtAnEdgeWithoutASlotThereSplitsTheArea)
         {
             auto tree = SideBySide();

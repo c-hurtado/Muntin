@@ -53,7 +53,7 @@ Shift+Win+arrows move the window:
 
 They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
 
-Shift+double-click on a title bar expands the window into the open space instead of maximizing it. A docked window takes the empty spaces beside it, including ones kept for a closed app, and the other windows keep their size. A floating window docks into the largest empty space on its monitor, or fills the work area (not maximized) when nothing is docked there. It works whatever `fancyzones_overrideSnapHotkeys` is.
+Shift+double-click on a title bar expands the window into the open space instead of maximizing it. A docked window takes the empty spaces beside it, including ones kept for a closed app, and the other windows keep their size. A floating window docks into the largest empty space on its monitor (an open one before one kept for an app), or fills the work area (not maximized) when nothing is docked there. When there is no space to expand into, or the window can't be docked, the double-click stays the app's and maximizes as usual. It works whatever `fancyzones_overrideSnapHotkeys` is.
 
 Three more shortcuts act on a docked window, and on any other window the keys keep their Windows meaning:
 

@@ -457,11 +457,16 @@ bool WorkArea::DockAuto(HWND window, HWND focused)
     return true;
 }
 
-bool WorkArea::DockExpand(HWND window)
+bool WorkArea::DockExpand(HWND window, bool apply)
 {
     auto& tree = DockTree();
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-    if (tree.Expand(window, get_process_path(window), area, DockGap()))
+    if (!apply && tree.Clone().Expand(window, L"", area, DockGap()))
+    {
+        return true;
+    }
+
+    if (apply && tree.Expand(window, get_process_path(window), area, DockGap()))
     {
         ApplyDockLayout();
         DockLayouts::instance().SaveData();
@@ -474,6 +479,11 @@ bool WorkArea::DockExpand(HWND window)
     if (std::any_of(leaves.begin(), leaves.end(), [](const Dock::Node* leaf) { return leaf->window && !leaf->hidden; }))
     {
         return false;
+    }
+
+    if (!apply)
+    {
+        return true;
     }
 
     FancyZonesWindowUtils::SaveWindowSizeAndOrigin(window);

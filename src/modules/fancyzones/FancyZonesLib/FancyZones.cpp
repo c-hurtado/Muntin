@@ -22,6 +22,8 @@
 #include <common/utils/elevation.h>
 
 #include <appmodel.h>
+#include <atomic>
+#include <thread>
 #include <shlwapi.h>
 #include <FancyZonesLib/FancyZonesData/LastUsedVirtualDesktop.h>
 #include <FancyZonesLib/FancyZonesData/LayoutHotkeys.h>
@@ -43,16 +45,25 @@
 #include <FancyZonesLib/WorkAreaConfiguration.h>
 
 // Shift+double-click on a title bar expands the window into the open space beside it instead of maximizing it.
-// The second click is swallowed, so the app never sees a double-click.
+// The second click is swallowed, so the app never sees a double-click. The hook has its own thread: every mouse event
+// in the system waits for it, and the main thread can be busy moving windows.
 namespace ShiftDoubleClick
 {
     HHOOK hook{};
-    HWND target{}; // Gets WM_PRIV_DOCK_EXPAND
+    std::thread thread;
+    std::atomic<DWORD> threadId{};
+    HWND target{}; // Gets WM_PRIV_DOCK_EXPAND, set before the thread starts
+
+    // Hook thread only
     HWND clicked{}; // The window under the first click
-    HWND caption{}; // The same window once the probe found its title bar under the first click
     DWORD clickTime{};
     POINT clickPoint{};
     bool swallowUp{};
+
+    // Written by the probe on the main thread: the click whose title bar it found, and the window it can expand
+    std::atomic<WPARAM> clickId{};
+    std::atomic<WPARAM> probedId{};
+    std::atomic<HWND> expandable{};
 
     bool ShiftOnly() noexcept
     {
@@ -70,63 +81,116 @@ namespace ShiftDoubleClick
 
         if (code == HC_ACTION && wparam == WM_LBUTTONDOWN)
         {
-            // No SendMessage here, a low-level hook must return at once: the title bar was probed after the first click
+            // An up that never came (secure desktop) must not take the next click's up
+            swallowUp = false;
+
             const auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lparam);
             const bool shift = ShiftOnly();
-            const bool second = shift && caption && caption == clicked && info->time - clickTime <= GetDoubleClickTime() &&
+            const bool second = shift && clicked && probedId == clickId && expandable == clicked && info->time - clickTime <= GetDoubleClickTime() &&
                                 std::abs(info->pt.x - clickPoint.x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
                                 std::abs(info->pt.y - clickPoint.y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
             if (second)
             {
-                PostMessageW(target, WM_PRIV_DOCK_EXPAND, 1, reinterpret_cast<LPARAM>(caption));
-                clicked = caption = nullptr;
+                PostMessageW(target, WM_PRIV_DOCK_EXPAND, 0, reinterpret_cast<LPARAM>(clicked));
+                clicked = nullptr;
+                ++clickId;
                 swallowUp = true;
                 return 1;
             }
 
+            // A new first click: a probe still running for the last one no longer counts. Ids are never 0, which means expand.
             clicked = shift ? GetAncestor(WindowFromPoint(info->pt), GA_ROOT) : nullptr;
-            caption = nullptr;
             clickTime = info->time;
             clickPoint = info->pt;
+            if (++clickId == 0)
+            {
+                ++clickId;
+            }
+
             if (clicked)
             {
-                PostMessageW(target, WM_PRIV_DOCK_EXPAND, 0, MAKELPARAM(info->pt.x, info->pt.y));
+                PostMessageW(target, WM_PRIV_DOCK_EXPAND, clickId, MAKELPARAM(info->pt.x, info->pt.y));
             }
         }
 
         return CallNextHookEx(hook, code, wparam, lparam);
     }
 
-    void Probe(POINT pt) noexcept
+    // On the main thread. canExpand: Muntin can expand the window, otherwise the double-click stays the app's.
+    void Probe(WPARAM id, POINT pt, const std::function<bool(HWND)>& canExpand) noexcept
     {
-        // Apps that draw their own title bar (Chrome, Terminal) answer on the child window under the cursor or on the top level one
         const auto child = WindowFromPoint(pt);
-        for (const auto window : { child, GetAncestor(child, GA_ROOT) })
+        const auto root = GetAncestor(child, GA_ROOT);
+        if (!root || !canExpand(root))
         {
+            return;
+        }
+
+        // Apps that draw their own title bar (Chrome, Terminal) answer on the child window under the cursor or on the top level one
+        for (const auto window : { child, root })
+        {
+            // The point in the coordinates the window sees: an app that isn't per monitor DPI aware hit-tests scaled points
+            POINT local = pt;
+            PhysicalToLogicalPointForPerMonitorDPI(window, &local);
             DWORD_PTR hit = HTNOWHERE;
-            if (window && SendMessageTimeoutW(window, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y), SMTO_ABORTIFHUNG, 100, &hit) && hit == HTCAPTION)
+            if (SendMessageTimeoutW(window, WM_NCHITTEST, 0, MAKELPARAM(local.x, local.y), SMTO_ABORTIFHUNG, 100, &hit) && hit == HTCAPTION)
             {
-                caption = GetAncestor(child, GA_ROOT);
+                expandable = root;
+                probedId = id;
                 return;
+            }
+
+            if (window == root)
+            {
+                break;
             }
         }
     }
 
     void Hook(HWND window) noexcept
     {
-        target = window;
-        if (!hook)
+#if defined(DISABLE_LOWLEVEL_HOOKS_WHEN_DEBUGGED)
+        if (IsDebuggerPresent())
         {
-            hook = SetWindowsHookExW(WH_MOUSE_LL, Proc, GetModuleHandleW(nullptr), 0);
+            return;
         }
+#endif
+        if (thread.joinable())
+        {
+            return;
+        }
+
+        target = window;
+        thread = std::thread([] {
+            threadId = GetCurrentThreadId();
+            hook = SetWindowsHookExW(WH_MOUSE_LL, Proc, GetModuleHandleW(nullptr), 0);
+            if (!hook)
+            {
+                Logger::error(L"Failed to hook the mouse for Shift+double-click");
+                return;
+            }
+
+            MSG message;
+            while (GetMessageW(&message, nullptr, 0, 0) > 0)
+            {
+                DispatchMessageW(&message);
+            }
+
+            UnhookWindowsHookEx(hook);
+            hook = nullptr;
+        });
     }
 
     void Unhook() noexcept
     {
-        if (hook)
+        if (thread.joinable())
         {
-            UnhookWindowsHookEx(hook);
-            hook = nullptr;
+            // The thread may not have its queue yet: retry until the quit message lands
+            while (!PostThreadMessageW(threadId, WM_QUIT, 0, 0) && thread.joinable() && WaitForSingleObject(thread.native_handle(), 10) == WAIT_TIMEOUT)
+            {
+            }
+
+            thread.join();
         }
     }
 }
@@ -520,7 +584,7 @@ private:
     void DockVisibility(HWND window, bool minimizing) noexcept;
     void DockSlot(int key, bool save) noexcept;
     void DockMoveByKey(DWORD vkCode) noexcept;
-    void DockExpand(HWND window) noexcept;
+    bool DockExpand(HWND window, bool apply) noexcept; // apply false: only whether it can
     void DockKey(WPARAM kind, LONG pixels) noexcept;
     void DockNewWindows() noexcept;
     bool DockAuto(HWND window) noexcept;
@@ -1264,13 +1328,13 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         }
         else if (message == WM_PRIV_DOCK_EXPAND)
         {
-            if (wparam == 0)
+            if (wparam != 0)
             {
-                ShiftDoubleClick::Probe({ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) });
+                ShiftDoubleClick::Probe(wparam, { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) }, [this](HWND window) { return DockExpand(window, false); });
             }
             else
             {
-                DockExpand(reinterpret_cast<HWND>(lparam));
+                DockExpand(reinterpret_cast<HWND>(lparam), true);
             }
         }
         else if (message == WM_PRIV_VD_SWITCH)
@@ -2170,11 +2234,11 @@ void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
     UpdateCaptionButtons();
 }
 
-void FancyZones::DockExpand(HWND window) noexcept
+bool FancyZones::DockExpand(HWND window, bool apply) noexcept
 {
     if (!CanDockMove(window))
     {
-        return;
+        return false;
     }
 
     WorkArea* target = m_workAreaConfiguration.GetWorkAreaFromWindow(window);
@@ -2186,9 +2250,14 @@ void FancyZones::DockExpand(HWND window) noexcept
         }
     }
 
-    if (!target)
+    if (!target || !target->DockExpand(window, false))
     {
-        return;
+        return false;
+    }
+
+    if (!apply)
+    {
+        return true;
     }
 
     if (FancyZonesWindowUtils::IsWindowMaximized(window))
@@ -2196,10 +2265,9 @@ void FancyZones::DockExpand(HWND window) noexcept
         ShowWindow(window, SW_RESTORE);
     }
 
-    if (target->DockExpand(window))
-    {
-        UpdateCaptionButtons();
-    }
+    target->DockExpand(window, true);
+    UpdateCaptionButtons();
+    return true;
 }
 
 void FancyZones::DockKey(WPARAM kind, LONG pixels) noexcept

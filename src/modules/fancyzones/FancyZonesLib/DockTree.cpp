@@ -545,12 +545,13 @@ bool Tree::Expand(HWND window, const std::wstring& app, const RECT& area, int ga
     bool expanded = false;
     if (!Find(window))
     {
-        // A window that isn't docked takes the largest empty slot on screen first
+        // A window that isn't docked takes the largest empty slot on screen first: an open one before one kept for an app
         Node* largest = nullptr;
-        LONG largestSize = 0;
+        std::pair<bool, LONG> largestSize{};
         Visit(*root, area, gap, [&](Node& node, const RECT& rect, size_t) {
-            const LONG size = (rect.right - rect.left) * (rect.bottom - rect.top);
-            if (IsEmptySlot(node) && size > largestSize)
+            const std::pair<bool, LONG> size{ node.app.empty(), (rect.right - rect.left) * (rect.bottom - rect.top) };
+            const bool bigEnough = rect.right - rect.left >= MinTargetSize && rect.bottom - rect.top >= MinTargetSize;
+            if (IsEmptySlot(node) && bigEnough && (!largest || size > largestSize))
             {
                 largest = &node;
                 largestSize = size;

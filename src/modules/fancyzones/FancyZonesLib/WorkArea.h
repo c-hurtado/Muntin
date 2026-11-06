@@ -73,7 +73,7 @@ public:
     void DockAtEdge(HWND window, Dock::Edge edge);
     // Docks a new window without a drag. focused: the docked window it splits, may be null. False when there is no room.
     bool DockAuto(HWND window, HWND focused);
-    bool DockExpand(HWND window);
+    bool DockExpand(HWND window, bool apply); // apply false: only whether it can
     bool DockToggleSplit(HWND window);
     // Doesn't save: a held key sends this many times a second, the caller saves when it stops
     bool DockGrow(HWND window, bool sideBySide, LONG delta);
