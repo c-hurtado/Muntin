@@ -44,107 +44,63 @@
 #include <FancyZonesLib/WorkArea.h>
 #include <FancyZonesLib/WorkAreaConfiguration.h>
 
-// Shift+double-click on a title bar expands the window into the open space beside it instead of maximizing it.
-// The second click is swallowed, so the app never sees a double-click. The hook has its own thread: every mouse event
-// in the system waits for it, and the main thread can be busy moving windows.
-namespace ShiftDoubleClick
+// A middle click on a title bar expands the window into the open space beside it. The click is not swallowed:
+// Windows does nothing with a middle click on a title bar, and tabs (Chrome, Terminal) are no title bar to the hit test.
+// The hook has its own thread: every mouse event in the system waits for it, and the main thread can be busy moving windows.
+namespace MiddleClick
 {
     HHOOK hook{};
     std::thread thread;
     std::atomic<DWORD> threadId{};
     HWND target{}; // Gets WM_PRIV_DOCK_EXPAND, set before the thread starts
 
-    // Hook thread only
-    HWND clicked{}; // The window under the first click
-    DWORD clickTime{};
-    POINT clickPoint{};
-    bool swallowUp{};
-
-    // Written by the probe on the main thread: the click whose title bar it found, and the window it can expand
-    std::atomic<WPARAM> clickId{};
-    std::atomic<WPARAM> probedId{};
-    std::atomic<HWND> expandable{};
-
-    bool ShiftOnly() noexcept
-    {
-        const auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
-        return down(VK_SHIFT) && !down(VK_CONTROL) && !down(VK_MENU) && !down(VK_LWIN) && !down(VK_RWIN);
-    }
-
     LRESULT CALLBACK Proc(int code, WPARAM wparam, LPARAM lparam) noexcept
     {
-        if (code == HC_ACTION && wparam == WM_LBUTTONUP && swallowUp)
+        if (code == HC_ACTION && wparam == WM_MBUTTONDOWN)
         {
-            swallowUp = false;
-            return 1;
-        }
-
-        if (code == HC_ACTION && wparam == WM_LBUTTONDOWN)
-        {
-            // An up that never came (secure desktop) must not take the next click's up
-            swallowUp = false;
-
+            // No SendMessage here, a low-level hook must return at once: the main thread hit-tests the point
+            // Not from remote tools or scripts that send their own middle clicks
             const auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lparam);
-            const bool shift = ShiftOnly();
-            const bool second = shift && clicked && probedId == clickId && expandable == clicked && info->time - clickTime <= GetDoubleClickTime() &&
-                                std::abs(info->pt.x - clickPoint.x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
-                                std::abs(info->pt.y - clickPoint.y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
-            if (second)
+            if (info->flags & LLMHF_INJECTED)
             {
-                PostMessageW(target, WM_PRIV_DOCK_EXPAND, 0, reinterpret_cast<LPARAM>(clicked));
-                clicked = nullptr;
-                ++clickId;
-                swallowUp = true;
-                return 1;
+                return CallNextHookEx(hook, code, wparam, lparam);
             }
 
-            // A new first click: a probe still running for the last one no longer counts. Ids are never 0, which means expand.
-            clicked = shift ? GetAncestor(WindowFromPoint(info->pt), GA_ROOT) : nullptr;
-            clickTime = info->time;
-            clickPoint = info->pt;
-            if (++clickId == 0)
-            {
-                ++clickId;
-            }
-
-            if (clicked)
-            {
-                PostMessageW(target, WM_PRIV_DOCK_EXPAND, clickId, MAKELPARAM(info->pt.x, info->pt.y));
-            }
+            PostMessageW(target, WM_PRIV_DOCK_EXPAND, 0, MAKELPARAM(info->pt.x, info->pt.y));
         }
 
         return CallNextHookEx(hook, code, wparam, lparam);
     }
 
-    // On the main thread. canExpand: Muntin can expand the window, otherwise the double-click stays the app's.
-    void Probe(WPARAM id, POINT pt, const std::function<bool(HWND)>& canExpand) noexcept
+    // On the main thread: whether the point is on the title bar of the window
+    bool OnCaption(HWND root, POINT pt) noexcept
     {
+        // Apps that draw their own title bar (Chrome, Terminal) answer on the child window under the cursor. Its answer stands:
+        // the top level window can call a whole band a title bar, tabs included. It is asked only when the child lets the point through.
         const auto child = WindowFromPoint(pt);
-        const auto root = GetAncestor(child, GA_ROOT);
-        if (!root || !canExpand(root))
-        {
-            return;
-        }
-
-        // Apps that draw their own title bar (Chrome, Terminal) answer on the child window under the cursor or on the top level one
         for (const auto window : { child, root })
         {
             // The point in the coordinates the window sees: an app that isn't per monitor DPI aware hit-tests scaled points
             POINT local = pt;
             PhysicalToLogicalPointForPerMonitorDPI(window, &local);
             DWORD_PTR hit = HTNOWHERE;
-            if (SendMessageTimeoutW(window, WM_NCHITTEST, 0, MAKELPARAM(local.x, local.y), SMTO_ABORTIFHUNG, 100, &hit) && hit == HTCAPTION)
+            if (!SendMessageTimeoutW(window, WM_NCHITTEST, 0, MAKELPARAM(local.x, local.y), SMTO_ABORTIFHUNG, 100, &hit))
             {
-                expandable = root;
-                probedId = id;
-                return;
+                return false;
             }
 
-            if (window == root)
+            if (hit == HTCAPTION)
             {
-                break;
+                return true;
+            }
+
+            if (window == root || (static_cast<LRESULT>(hit) != HTTRANSPARENT && hit != HTNOWHERE))
+            {
+                return false;
             }
         }
+
+        return false;
     }
 
     void Hook(HWND window) noexcept
@@ -166,7 +122,7 @@ namespace ShiftDoubleClick
             hook = SetWindowsHookExW(WH_MOUSE_LL, Proc, GetModuleHandleW(nullptr), 0);
             if (!hook)
             {
-                Logger::error(L"Failed to hook the mouse for Shift+double-click");
+                Logger::error(L"Failed to hook the mouse for middle clicks on title bars");
                 return;
             }
 
@@ -584,7 +540,7 @@ private:
     void DockVisibility(HWND window, bool minimizing) noexcept;
     void DockSlot(int key, bool save) noexcept;
     void DockMoveByKey(DWORD vkCode) noexcept;
-    bool DockExpand(HWND window, bool apply) noexcept; // apply false: only whether it can
+    void DockExpand(HWND window, POINT click) noexcept; // A middle click at that point, on the window or not
     void DockKey(WPARAM kind, LONG pixels) noexcept;
     void DockNewWindows() noexcept;
     bool DockAuto(HWND window) noexcept;
@@ -741,7 +697,7 @@ FancyZones::Destroy() noexcept
         KillTimer(m_window, CaptionButtonsTimerId);
     }
 
-    ShiftDoubleClick::Unhook();
+    MiddleClick::Unhook();
     m_dockMotion.reset();
     m_desktopScroll.reset();
     DockLayouts::instance().SwitchPagesHome();
@@ -1324,18 +1280,12 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_INIT)
         {
             OnDisplayChange(DisplayChangeType::Initialization);
-            ShiftDoubleClick::Hook(m_window);
+            MiddleClick::Hook(m_window);
         }
-        else if (message == WM_PRIV_DOCK_EXPAND)
+        else if (message == WM_PRIV_DOCK_EXPAND && FancyZonesSettings::settings().dockMiddleClickExpand)
         {
-            if (wparam != 0)
-            {
-                ShiftDoubleClick::Probe(wparam, { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) }, [this](HWND window) { return DockExpand(window, false); });
-            }
-            else
-            {
-                DockExpand(reinterpret_cast<HWND>(lparam), true);
-            }
+            const POINT pt{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+            DockExpand(GetAncestor(WindowFromPoint(pt), GA_ROOT), pt);
         }
         else if (message == WM_PRIV_VD_SWITCH)
         {
@@ -2234,11 +2184,11 @@ void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
     UpdateCaptionButtons();
 }
 
-bool FancyZones::DockExpand(HWND window, bool apply) noexcept
+void FancyZones::DockExpand(HWND window, POINT click) noexcept
 {
-    if (!CanDockMove(window))
+    if (!window || !CanDockMove(window))
     {
-        return false;
+        return;
     }
 
     WorkArea* target = m_workAreaConfiguration.GetWorkAreaFromWindow(window);
@@ -2250,14 +2200,10 @@ bool FancyZones::DockExpand(HWND window, bool apply) noexcept
         }
     }
 
-    if (!target || !target->DockExpand(window, false))
+    // The cheap checks first: every middle click in the system lands here, and the hit test asks another process
+    if (!target || !target->DockExpand(window, false) || !MiddleClick::OnCaption(window, click))
     {
-        return false;
-    }
-
-    if (!apply)
-    {
-        return true;
+        return;
     }
 
     if (FancyZonesWindowUtils::IsWindowMaximized(window))
@@ -2267,7 +2213,6 @@ bool FancyZones::DockExpand(HWND window, bool apply) noexcept
 
     target->DockExpand(window, true);
     UpdateCaptionButtons();
-    return true;
 }
 
 void FancyZones::DockKey(WPARAM kind, LONG pixels) noexcept

@@ -69,6 +69,7 @@ struct Settings
     bool dockCaptionButtons = true; // < > buttons next to the caption buttons of the docked windows
     bool dockAutoTile = false; // New windows dock by themselves, splitting the focused docked window
     bool dockAnimation = true; // Windows moved with Shift+Win+arrows spring to their new places
+    bool dockMiddleClickExpand = true; // A middle click on a title bar expands its window into the empty space
     bool desktopScrollOverview = false; // Scrolling the desktop zooms out to the pages, and ends on a page
     int desktopScrollPages = 2; // Pages each monitor scrolls through, the first included, at most MaxDesktopScrollPages. 1: no scrolling.
     bool dockEdgeSnap = true; // A window dragged to the left or right edge docks there without Shift, like Windows snap

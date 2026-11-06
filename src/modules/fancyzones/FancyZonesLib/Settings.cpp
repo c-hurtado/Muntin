@@ -167,6 +167,11 @@ void FancyZonesSettings::LoadSettings()
             m_settings.dockAnimation = *val;
         }
 
+        if (auto val = values.get_bool_value(NonLocalizable::DockMiddleClickExpandID))
+        {
+            m_settings.dockMiddleClickExpand = *val;
+        }
+
         if (auto val = values.get_bool_value(NonLocalizable::DockEdgeSnapID))
         {
             m_settings.dockEdgeSnap = *val;

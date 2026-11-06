@@ -53,7 +53,7 @@ Shift+Win+arrows move the window:
 
 They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
 
-Shift+double-click on a title bar expands the window into the open space instead of maximizing it. A docked window takes the empty spaces beside it, including ones kept for a closed app, and the other windows keep their size. A floating window docks into the largest empty space on its monitor (an open one before one kept for an app), or fills the work area (not maximized) when nothing is docked there. When there is no space to expand into, or the window can't be docked, the double-click stays the app's and maximizes as usual. It works whatever `fancyzones_overrideSnapHotkeys` is.
+A middle click on a title bar expands the window into the open space instead of maximizing it. A docked window takes the empty spaces beside it, including ones kept for a closed app, and the other windows keep their size. A floating window docks into the largest empty space on its monitor (an open one before one kept for an app), or fills the work area (not maximized) when nothing is docked there. When there is no space to expand into, or the window can't be docked, nothing happens. Middle clicks on tabs still reach the app and don't expand. The click is not taken from the app, so an app that acts on a middle click in its empty tab strip does both (Firefox opens a new tab). It works whatever `fancyzones_overrideSnapHotkeys` is. Turn it off with `fancyzones_dockMiddleClickExpand` or the tray menu.
 
 Three more shortcuts act on a docked window, and on any other window the keys keep their Windows meaning:
 
@@ -170,6 +170,7 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
 | `fancyzones_dockAutoTile` | New windows dock by themselves (see "Dock new windows by themselves") | `false` |
 | `fancyzones_dockAnimation` | Windows moved with Shift+Win+arrows or the < > buttons spring to their new places | `true` |
+| `fancyzones_dockMiddleClickExpand` | A middle click on a title bar expands its window into the open space | `true` |
 | `fancyzones_desktopScrollOverview` | Scrolling the desktop zooms out to the pages (see "Scroll the desktop") | `false` |
 | `fancyzones_desktopScrollPages` | How many pages each monitor scrolls through, the first included, empty pages too: 1 to 4. 1 turns scrolling off, and Shift+Win+Down doesn't take a window past the last page. | 2 |
 | `fancyzones_dockEdgeSnap` | A window dragged to the left or right edge of a screen docks there without Shift, like Windows snap. The top edge is left to Windows (it maximizes), and the bottom edge is the taskbar. Only with `fancyzones_shiftDrag` on. | `true` |

@@ -31,6 +31,7 @@ namespace
         { NonLocalizable::DockAutoTileID, L"Dock new windows by themselves", &Settings::dockAutoTile },
         { NonLocalizable::OverrideSnapHotKeysID, L"Win+arrow keys move docked windows", &Settings::overrideSnapHotkeys },
         { NonLocalizable::DockCaptionButtonsID, L"< > buttons on docked windows", &Settings::dockCaptionButtons },
+        { NonLocalizable::DockMiddleClickExpandID, L"Middle click on a title bar expands the window", &Settings::dockMiddleClickExpand },
         { NonLocalizable::DockAnimationID, L"Animations", &Settings::dockAnimation },
         { NonLocalizable::DesktopScrollOverviewID, L"Zoom out while scrolling the desktop", &Settings::desktopScrollOverview },
     };
