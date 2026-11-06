@@ -645,6 +645,98 @@ namespace FancyZonesUnitTests
             Assert::IsTrue(target->node == tree.Find(m_a));
         }
 
+        TEST_METHOD (DockingAtAnEdgeFillsTheEmptySlotThere)
+        {
+            // a and b share the left half, the right half is kept for an app that is closed
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 250, 700 });
+            auto leaf = tree.Find(m_b);
+            leaf->window = nullptr;
+            leaf->app = L"kept.exe";
+            leaf->launch = L"kept.exe --profile";
+
+            const auto d = reinterpret_cast<HWND>(4);
+            tree.InsertAtEdge(d, L"d.exe", m_area, 0, Dock::Edge::Right);
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 400 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 0, 400, 500, 800 }, RectOf(tree, m_c));
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, d));
+            Assert::AreEqual(std::wstring{ L"d.exe" }, tree.Find(d)->app);
+            Assert::IsTrue(tree.Find(d)->launch.empty());
+        }
+
+        TEST_METHOD (ExpandTakesTheEmptySpaceAndTheOthersKeepTheirSize)
+        {
+            // a | c on the left half, the right half kept for an app
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 450, 400 });
+            tree.Find(m_b)->app = L"kept.exe";
+            tree.Find(m_b)->window = nullptr;
+
+            Assert::IsTrue(tree.Expand(m_c, L"", m_area, 0));
+            CustomAssert::AreEqual(RECT{ 0, 0, 250, 800 }, RectOf(tree, m_a));
+            CustomAssert::AreEqual(RECT{ 250, 0, 1000, 800 }, RectOf(tree, m_c));
+            Assert::AreEqual(size_t{ 2 }, tree.Leaves().size());
+
+            // Nothing empty left
+            Assert::IsFalse(tree.Expand(m_c, L"", m_area, 0));
+        }
+
+        TEST_METHOD (ExpandKeepsTheGapsAndTheSizeOfTheOthers)
+        {
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 450, 400 });
+            tree.Find(m_b)->window = nullptr;
+            CustomAssert::AreEqual(RECT{ 252, 0, 496, 800 }, RectOf(tree, m_c, 8));
+
+            Assert::IsTrue(tree.Expand(m_a, L"", m_area, 8));
+            CustomAssert::AreEqual(RECT{ 0, 0, 748, 800 }, RectOf(tree, m_a, 8));
+            CustomAssert::AreEqual(RECT{ 756, 0, 1000, 800 }, RectOf(tree, m_c, 8));
+        }
+
+        TEST_METHOD (ExpandOfAFloatingWindowFillsTheLargestEmptySlot)
+        {
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 750, 700 });
+            tree.Find(m_b)->window = nullptr;
+
+            const auto d = reinterpret_cast<HWND>(4);
+            Assert::IsTrue(tree.Expand(d, L"d.exe", m_area, 0));
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 400 }, RectOf(tree, d));
+            Assert::IsFalse(tree.Expand(reinterpret_cast<HWND>(5), L"", m_area, 0));
+        }
+
+        TEST_METHOD (DockingAtAnEdgeWithoutASlotThereSplitsTheArea)
+        {
+            auto tree = SideBySide();
+            auto leaf = tree.Find(m_b);
+            leaf->window = nullptr;
+            leaf->app = L"kept.exe";
+
+            tree.InsertAtEdge(m_c, L"", m_area, 0, Dock::Edge::Left);
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_c));
+            CustomAssert::AreEqual(RECT{ 500, 0, 750, 800 }, RectOf(tree, m_a));
+        }
+
+        TEST_METHOD (DockingAtAnEdgePrefersAnOpenSlotAndDropsTheOthers)
+        {
+            // Top right is kept for an app, bottom right and bottom left are open
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            DockAt(tree, m_b, { 750, 400 });
+            DockAt(tree, m_c, { 750, 700 });
+            DockAt(tree, reinterpret_cast<HWND>(5), { 250, 700 });
+            tree.Find(m_b)->app = L"kept.exe";
+            tree.Find(m_b)->window = nullptr;
+            tree.Find(m_c)->window = nullptr;
+            tree.Find(reinterpret_cast<HWND>(5))->window = nullptr;
+
+            const auto d = reinterpret_cast<HWND>(4);
+            tree.InsertAtEdge(d, L"", m_area, 0, Dock::Edge::Right);
+            CustomAssert::AreEqual(RECT{ 500, 400, 1000, 800 }, RectOf(tree, d));
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
+            Assert::AreEqual(std::wstring{ L"kept.exe" }, tree.Leaves()[1]->app);
+        }
+
         TEST_METHOD (AutoDockRefusesASplitThatLeavesTooLittle)
         {
             const RECT narrow{ 0, 0, 300, 150 };

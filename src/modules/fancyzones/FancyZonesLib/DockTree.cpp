@@ -385,6 +385,7 @@ void Tree::Insert(HWND window, const std::wstring& app, const Target& target)
     {
         target.node->window = window;
         target.node->app = app;
+        target.node->launch.clear();
         target.node->hidden = false;
         target.node->placedAt = 0;
         return;
@@ -492,6 +493,132 @@ std::optional<Target> Tree::AutoTarget(const RECT& area, int gap, HWND focused)
     }
 
     return target;
+}
+
+void Tree::InsertAtEdge(HWND window, const std::wstring& app, const RECT& area, int gap, Edge edge)
+{
+    // The empty slot on screen with the longest border on that edge
+    const auto slotAtEdge = [&](bool kept) -> Node* {
+        Node* slot = nullptr;
+        LONG longest = 0;
+        Visit(*root, area, gap, [&](Node& node, const RECT& rect, size_t) {
+            const bool touches = edge == Edge::Left ? rect.left == area.left : edge == Edge::Right ? rect.right == area.right : edge == Edge::Top ? rect.top == area.top : rect.bottom == area.bottom;
+            const LONG border = IsSideEdge(edge) ? rect.bottom - rect.top : rect.right - rect.left;
+            const bool bigEnough = rect.right - rect.left >= MinTargetSize && rect.bottom - rect.top >= MinTargetSize;
+            if (IsEmptySlot(node) && node.app.empty() != kept && touches && bigEnough && border > longest)
+            {
+                slot = &node;
+                longest = border;
+            }
+        });
+
+        return slot;
+    };
+
+    // An open slot first, then one kept for an app, which the app loses: the windows already there keep their size.
+    // The other open slots go as they do when the window splits the whole area.
+    for (const bool kept : { false, true })
+    {
+        if (root && Occupies(*root))
+        {
+            if (const auto slot = slotAtEdge(kept))
+            {
+                Insert(window, app, Target{ .node = slot, .edge = edge, .fill = true });
+                DropOpenSlots(root);
+                return;
+            }
+
+            DropOpenSlots(root);
+        }
+    }
+
+    Insert(window, app, Target{ .node = nullptr, .edge = edge });
+}
+
+bool Tree::Expand(HWND window, const std::wstring& app, const RECT& area, int gap)
+{
+    if (!root || !Occupies(*root))
+    {
+        return false;
+    }
+
+    bool expanded = false;
+    if (!Find(window))
+    {
+        // A window that isn't docked takes the largest empty slot on screen first
+        Node* largest = nullptr;
+        LONG largestSize = 0;
+        Visit(*root, area, gap, [&](Node& node, const RECT& rect, size_t) {
+            const LONG size = (rect.right - rect.left) * (rect.bottom - rect.top);
+            if (IsEmptySlot(node) && size > largestSize)
+            {
+                largest = &node;
+                largestSize = size;
+            }
+        });
+
+        if (!largest)
+        {
+            return false;
+        }
+
+        Insert(window, app, Target{ .node = largest, .edge = Edge::Left, .fill = true });
+        expanded = true;
+    }
+
+    // Each split whose other side is only empty slots goes, nearest first. The windows inside the side that stays
+    // keep their size along that split, so the window alone takes the space.
+    for (;;)
+    {
+        const auto path = PathTo(*root, area, gap, window);
+        size_t i = path.size() > 0 ? path.size() - 1 : 0;
+        const auto otherSide = [&](size_t k) -> const Node& {
+            const Node& parent = *path[k - 1].first;
+            return parent.first.get() == path[k].first ? *parent.second : *parent.first;
+        };
+
+        while (i > 0 && !OnlyEmptySlots(otherSide(i)))
+        {
+            --i;
+        }
+
+        if (i == 0)
+        {
+            return expanded;
+        }
+
+        Node* split = path[i - 1].first;
+        const bool sideBySide = split->sideBySide;
+        const std::vector<std::pair<Node*, RECT>> before(path.begin() + i, path.end());
+        auto owner = OwnerOf(&root, split);
+        *owner = std::move(split->first.get() == path[i].first ? split->first : split->second);
+
+        for (size_t j = 0; j + 1 < before.size(); ++j)
+        {
+            Node* node = before[j].first;
+            if (node->sideBySide != sideBySide || !DividesSpace(*node))
+            {
+                continue;
+            }
+
+            const bool windowFirst = node->first.get() == before[j + 1].first;
+            const auto [oldFirst, oldSecond] = Split(before[j].second, sideBySide, node->ratio, gap);
+            const RECT& kept = windowFirst ? oldSecond : oldFirst;
+            const LONG extent = sideBySide ? kept.right - kept.left : kept.bottom - kept.top;
+
+            for (const auto& [onPath, rect] : PathTo(*root, area, gap, window))
+            {
+                if (onPath == node)
+                {
+                    const LONG size = sideBySide ? rect.right - rect.left : rect.bottom - rect.top;
+                    const LONG cut = windowFirst ? size - extent - (gap - gap / 2) : extent + gap / 2;
+                    node->ratio = std::clamp(static_cast<float>(cut) / static_cast<float>((std::max)(size, 1L)), MinRatio, 1.f - MinRatio);
+                }
+            }
+        }
+
+        expanded = true;
+    }
 }
 
 bool Tree::Move(HWND window, const RECT& area, int gap, Edge direction)

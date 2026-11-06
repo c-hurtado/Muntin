@@ -48,10 +48,12 @@ Shift+Win+arrows move the window:
 | Floating, Left or Right | Docks it on that side of its monitor |
 | Floating, Up or Down | Carries it to the page above or below, where it stays floating. On the first page Up docks it at the top. |
 | Docked, with a neighbor on that side | Swaps the two. Also moves it into an empty half. |
-| Docked, with nothing on that side | Moves it to the monitor on that side, docked on the edge it came in from |
+| Docked, with nothing on that side | Moves it to the monitor on that side, docked on the edge it came in from. An empty space along that edge is filled and the windows there keep their size; a space kept for a closed app is taken only when there is no other. |
 | Docked, Up or Down, with nothing on that side and no monitor there | Scrolls to the page above or below and takes the window along, docked on the same side, or in the empty half if the page has one. It stops at the last page (see `fancyzones_desktopScrollPages`). |
 
 They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
+
+Shift+double-click on a title bar expands the window into the open space instead of maximizing it. A docked window takes the empty spaces beside it, including ones kept for a closed app, and the other windows keep their size. A floating window docks into the largest empty space on its monitor, or fills the work area (not maximized) when nothing is docked there. It works whatever `fancyzones_overrideSnapHotkeys` is.
 
 Three more shortcuts act on a docked window, and on any other window the keys keep their Windows meaning:
 

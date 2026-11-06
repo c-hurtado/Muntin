@@ -63,6 +63,12 @@ namespace Dock
         // Where a new window goes without a drag, like Hyprland's dwindle layout: an empty slot if there is one, otherwise it splits
         // the focused window along its longer side and takes the right or bottom half. Without a focused window it splits the largest one.
         std::optional<Target> AutoTarget(const RECT& area, int gap, HWND focused);
+        // Docks the window on that edge of the area. An empty slot on screen along that edge is filled instead of splitting the area,
+        // an open one before one kept for an app.
+        void InsertAtEdge(HWND window, const std::wstring& app, const RECT& area, int gap, Edge edge);
+        // The window takes the empty slots beside it, the other windows keep their size along those splits.
+        // A window that isn't docked first fills the largest empty slot on screen. False when nothing changed.
+        bool Expand(HWND window, const std::wstring& app, const RECT& area, int gap);
         // Swaps the window with the leaf next to it on that side. False when there is none.
         bool Move(HWND window, const RECT& area, int gap, Edge direction);
         // The freed space goes to the neighbors

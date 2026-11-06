@@ -406,7 +406,9 @@ void WorkArea::DockAtEdge(HWND window, Dock::Edge edge)
 {
     auto& tree = DockTree();
     tree.Remove(window);
-    tree.Insert(window, get_process_path(window), Dock::Target{ .node = nullptr, .edge = edge });
+
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    tree.InsertAtEdge(window, get_process_path(window), area, DockGap(), edge);
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
     DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
@@ -452,6 +454,30 @@ bool WorkArea::DockAuto(HWND window, HWND focused)
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
     DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
+    return true;
+}
+
+bool WorkArea::DockExpand(HWND window)
+{
+    auto& tree = DockTree();
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    if (tree.Expand(window, get_process_path(window), area, DockGap()))
+    {
+        ApplyDockLayout();
+        DockLayouts::instance().SaveData();
+        DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
+        return true;
+    }
+
+    // Nothing docked here: a floating window takes the work area, without being maximized
+    const auto leaves = tree.Leaves();
+    if (std::any_of(leaves.begin(), leaves.end(), [](const Dock::Node* leaf) { return leaf->window && !leaf->hidden; }))
+    {
+        return false;
+    }
+
+    FancyZonesWindowUtils::SaveWindowSizeAndOrigin(window);
+    FancyZonesWindowUtils::SizeWindowToRect(window, FancyZonesWindowUtils::AdjustRectForSizeWindowToRect(window, area, m_window));
     return true;
 }
 

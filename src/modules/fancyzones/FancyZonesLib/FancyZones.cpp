@@ -42,6 +42,95 @@
 #include <FancyZonesLib/WorkArea.h>
 #include <FancyZonesLib/WorkAreaConfiguration.h>
 
+// Shift+double-click on a title bar expands the window into the open space beside it instead of maximizing it.
+// The second click is swallowed, so the app never sees a double-click.
+namespace ShiftDoubleClick
+{
+    HHOOK hook{};
+    HWND target{}; // Gets WM_PRIV_DOCK_EXPAND
+    HWND clicked{}; // The window under the first click
+    HWND caption{}; // The same window once the probe found its title bar under the first click
+    DWORD clickTime{};
+    POINT clickPoint{};
+    bool swallowUp{};
+
+    bool ShiftOnly() noexcept
+    {
+        const auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
+        return down(VK_SHIFT) && !down(VK_CONTROL) && !down(VK_MENU) && !down(VK_LWIN) && !down(VK_RWIN);
+    }
+
+    LRESULT CALLBACK Proc(int code, WPARAM wparam, LPARAM lparam) noexcept
+    {
+        if (code == HC_ACTION && wparam == WM_LBUTTONUP && swallowUp)
+        {
+            swallowUp = false;
+            return 1;
+        }
+
+        if (code == HC_ACTION && wparam == WM_LBUTTONDOWN)
+        {
+            // No SendMessage here, a low-level hook must return at once: the title bar was probed after the first click
+            const auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lparam);
+            const bool shift = ShiftOnly();
+            const bool second = shift && caption && caption == clicked && info->time - clickTime <= GetDoubleClickTime() &&
+                                std::abs(info->pt.x - clickPoint.x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+                                std::abs(info->pt.y - clickPoint.y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+            if (second)
+            {
+                PostMessageW(target, WM_PRIV_DOCK_EXPAND, 1, reinterpret_cast<LPARAM>(caption));
+                clicked = caption = nullptr;
+                swallowUp = true;
+                return 1;
+            }
+
+            clicked = shift ? GetAncestor(WindowFromPoint(info->pt), GA_ROOT) : nullptr;
+            caption = nullptr;
+            clickTime = info->time;
+            clickPoint = info->pt;
+            if (clicked)
+            {
+                PostMessageW(target, WM_PRIV_DOCK_EXPAND, 0, MAKELPARAM(info->pt.x, info->pt.y));
+            }
+        }
+
+        return CallNextHookEx(hook, code, wparam, lparam);
+    }
+
+    void Probe(POINT pt) noexcept
+    {
+        // Apps that draw their own title bar (Chrome, Terminal) answer on the child window under the cursor or on the top level one
+        const auto child = WindowFromPoint(pt);
+        for (const auto window : { child, GetAncestor(child, GA_ROOT) })
+        {
+            DWORD_PTR hit = HTNOWHERE;
+            if (window && SendMessageTimeoutW(window, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y), SMTO_ABORTIFHUNG, 100, &hit) && hit == HTCAPTION)
+            {
+                caption = GetAncestor(child, GA_ROOT);
+                return;
+            }
+        }
+    }
+
+    void Hook(HWND window) noexcept
+    {
+        target = window;
+        if (!hook)
+        {
+            hook = SetWindowsHookExW(WH_MOUSE_LL, Proc, GetModuleHandleW(nullptr), 0);
+        }
+    }
+
+    void Unhook() noexcept
+    {
+        if (hook)
+        {
+            UnhookWindowsHookEx(hook);
+            hook = nullptr;
+        }
+    }
+}
+
 enum class DisplayChangeType
 {
     WorkArea,
@@ -431,6 +520,7 @@ private:
     void DockVisibility(HWND window, bool minimizing) noexcept;
     void DockSlot(int key, bool save) noexcept;
     void DockMoveByKey(DWORD vkCode) noexcept;
+    void DockExpand(HWND window) noexcept;
     void DockKey(WPARAM kind, LONG pixels) noexcept;
     void DockNewWindows() noexcept;
     bool DockAuto(HWND window) noexcept;
@@ -587,6 +677,7 @@ FancyZones::Destroy() noexcept
         KillTimer(m_window, CaptionButtonsTimerId);
     }
 
+    ShiftDoubleClick::Unhook();
     m_dockMotion.reset();
     m_desktopScroll.reset();
     DockLayouts::instance().SwitchPagesHome();
@@ -1169,6 +1260,18 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_INIT)
         {
             OnDisplayChange(DisplayChangeType::Initialization);
+            ShiftDoubleClick::Hook(m_window);
+        }
+        else if (message == WM_PRIV_DOCK_EXPAND)
+        {
+            if (wparam == 0)
+            {
+                ShiftDoubleClick::Probe({ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) });
+            }
+            else
+            {
+                DockExpand(reinterpret_cast<HWND>(lparam));
+            }
         }
         else if (message == WM_PRIV_VD_SWITCH)
         {
@@ -2065,6 +2168,38 @@ void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
     const auto edge = vkCode == VK_LEFT ? Dock::Edge::Left : vkCode == VK_RIGHT ? Dock::Edge::Right : vkCode == VK_UP ? Dock::Edge::Top : Dock::Edge::Bottom;
     DockMoveWindow(GetForegroundWindow(), edge);
     UpdateCaptionButtons();
+}
+
+void FancyZones::DockExpand(HWND window) noexcept
+{
+    if (!CanDockMove(window))
+    {
+        return;
+    }
+
+    WorkArea* target = m_workAreaConfiguration.GetWorkAreaFromWindow(window);
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (workArea && workArea->DockTree().Find(window))
+        {
+            target = workArea.get();
+        }
+    }
+
+    if (!target)
+    {
+        return;
+    }
+
+    if (FancyZonesWindowUtils::IsWindowMaximized(window))
+    {
+        ShowWindow(window, SW_RESTORE);
+    }
+
+    if (target->DockExpand(window))
+    {
+        UpdateCaptionButtons();
+    }
 }
 
 void FancyZones::DockKey(WPARAM kind, LONG pixels) noexcept
