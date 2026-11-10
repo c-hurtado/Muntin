@@ -52,6 +52,11 @@ namespace Dock
         Tree Clone() const;
         std::vector<Node*> Leaves() const;
         Node* Find(HWND window) const;
+        // Whether a docked window shows: minimized and hidden windows and empty slots don't count
+        bool ShowsWindow() const noexcept;
+        // Replaces the whole tree with the two windows in halves, first on the left or top.
+        // Hidden windows and slots kept for apps are dropped: kept, they would squeeze the halves when they come back.
+        void Pair(HWND first, const std::wstring& firstApp, HWND second, const std::wstring& secondApp, bool sideBySide);
 
         // edgeBand: distance in pixels from an edge of the area within which the window docks against the whole area.
         // windowEdgeShare: share of a docked window, from each of its edges, within which the window docks against it.

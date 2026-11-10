@@ -253,6 +253,23 @@ std::vector<Node*> Tree::Leaves() const
     return leaves;
 }
 
+bool Tree::ShowsWindow() const noexcept
+{
+    return root && Occupies(*root);
+}
+
+void Tree::Pair(HWND first, const std::wstring& firstApp, HWND second, const std::wstring& secondApp, bool sideBySide)
+{
+    root = std::make_unique<Node>();
+    root->sideBySide = sideBySide;
+    root->first = std::make_unique<Node>();
+    root->first->window = first;
+    root->first->app = firstApp;
+    root->second = std::make_unique<Node>();
+    root->second->window = second;
+    root->second->app = secondApp;
+}
+
 Node* Tree::Find(HWND window) const
 {
     if (!window)

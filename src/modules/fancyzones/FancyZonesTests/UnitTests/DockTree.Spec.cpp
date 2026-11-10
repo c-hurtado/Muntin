@@ -766,6 +766,37 @@ namespace FancyZonesUnitTests
             Assert::IsNotNull(tree.Find(m_a));
         }
 
+        TEST_METHOD (HiddenWindowsAndKeptSlotsShowNothing)
+        {
+            auto tree = SideBySide();
+            Assert::IsTrue(tree.ShowsWindow());
+            tree.Find(m_a)->hidden = true;
+            Assert::IsTrue(tree.ShowsWindow());
+            tree.Find(m_b)->app = L"kept.exe";
+            tree.Find(m_b)->window = nullptr;
+            Assert::IsFalse(tree.ShowsWindow());
+            Assert::IsFalse(Dock::Tree{}.ShowsWindow());
+        }
+
+        TEST_METHOD (PairingReplacesHiddenWindowsAndKeptSlotsWithHalves)
+        {
+            // What a middle click does with two floating windows over leftovers: closed Settings windows (hidden) and kept slots
+            auto tree = SideBySide();
+            tree.Find(m_a)->hidden = true;
+            tree.Find(m_b)->app = L"kept.exe";
+            tree.Find(m_b)->window = nullptr;
+            const auto d = reinterpret_cast<HWND>(4);
+
+            tree.Pair(m_c, L"c.exe", d, L"d.exe", true);
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_c));
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, d));
+            Assert::AreEqual(size_t{ 2 }, tree.Leaves().size());
+
+            tree.Pair(d, L"d.exe", m_c, L"c.exe", false);
+            CustomAssert::AreEqual(RECT{ 0, 0, 1000, 400 }, RectOf(tree, d));
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, RectOf(tree, m_c));
+        }
+
         TEST_METHOD (DockingAtTheBottomFillsTheEmptySlotThere)
         {
             Dock::Tree tree;

@@ -71,6 +71,8 @@ public:
     bool UndockWindow(HWND window);
     // Docks the window against that edge of the work area
     void DockAtEdge(HWND window, Dock::Edge edge);
+    // Replaces the layout with the two windows in halves. The window is carried to the page when the desktop is scrolled.
+    void DockPair(HWND window, HWND partner, bool windowFirst, bool sideBySide);
     // Docks a new window without a drag. focused: the docked window it splits, may be null. False when there is no room.
     bool DockAuto(HWND window, HWND focused);
     bool DockExpand(HWND window, bool apply); // apply false: only whether it can

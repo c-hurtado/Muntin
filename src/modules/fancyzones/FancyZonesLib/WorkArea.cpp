@@ -414,6 +414,16 @@ void WorkArea::DockAtEdge(HWND window, Dock::Edge edge)
     DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
 }
 
+void WorkArea::DockPair(HWND window, HWND partner, bool windowFirst, bool sideBySide)
+{
+    const auto app = get_process_path(window);
+    const auto partnerApp = get_process_path(partner);
+    windowFirst ? DockTree().Pair(window, app, partner, partnerApp, sideBySide) : DockTree().Pair(partner, partnerApp, window, app, sideBySide);
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+    DesktopScroll::RestOnPage(m_uniqueId.monitorId.monitor, window);
+}
+
 Dock::Edge WorkArea::DockSide(HWND window)
 {
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
@@ -475,8 +485,7 @@ bool WorkArea::DockExpand(HWND window, bool apply)
     }
 
     // Nothing docked here: a floating window takes the work area, without being maximized
-    const auto leaves = tree.Leaves();
-    if (std::any_of(leaves.begin(), leaves.end(), [](const Dock::Node* leaf) { return leaf->window && !leaf->hidden; }))
+    if (tree.ShowsWindow())
     {
         return false;
     }

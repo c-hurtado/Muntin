@@ -2211,7 +2211,52 @@ void FancyZones::DockExpand(HWND window, POINT click) noexcept
         ShowWindow(window, SW_RESTORE);
     }
 
-    target->DockExpand(window, true);
+    // No docked window shows on the monitor and another floating window is there: the clicked window docks on the half
+    // it's on and the other one, nearest the top of the z-order, takes the other half. Minimized windows and slots kept
+    // for apps don't count, they pile up (closed Settings windows stay docked but cloaked). They leave the layout.
+    HWND partner = nullptr;
+    const auto cloaked = [](HWND hwnd) {
+        BOOL value = FALSE;
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &value, sizeof(value));
+        return value != FALSE;
+    };
+    const bool pairing = !m_windowMouseSnapper && !target->DockTree().ShowsWindow() && m_workAreaConfiguration.GetWorkAreaFromWindow(window) == target;
+    for (auto other = pairing ? GetTopWindow(nullptr) : nullptr; other && !partner; other = GetWindow(other, GW_HWNDNEXT))
+    {
+        // The cheap checks first. Always-on-top windows (Task Manager), windows parked on another desktop page
+        // and the clicked window's own dialogs (or the window that owns it) don't count.
+        if (other != window && IsWindowVisible(other) && FancyZonesWindowUtils::HasStyle(GetWindowLong(other, GWL_STYLE), WS_THICKFRAME) &&
+            !FancyZonesWindowUtils::HasStyle(GetWindowLong(other, GWL_EXSTYLE), WS_EX_TOPMOST) &&
+            GetWindow(other, GW_OWNER) != window && GetWindow(window, GW_OWNER) != other &&
+            m_workAreaConfiguration.GetWorkAreaFromWindow(other) == target && !DesktopScroll::IsParked(other) && !IsDocked(other) &&
+            !cloaked(other) && CanDockMove(other))
+        {
+            partner = other;
+        }
+    }
+
+    if (!partner)
+    {
+        target->DockExpand(window, true);
+        UpdateCaptionButtons();
+        return;
+    }
+
+    RECT rect{};
+    GetWindowRect(window, &rect);
+    const auto& area = target->GetWorkAreaRect();
+    const bool sideBySide = area.width() >= area.height();
+    const bool first = sideBySide ? rect.left + rect.right < area.left() + area.right() : rect.top + rect.bottom < area.top() + area.bottom();
+    if (FancyZonesWindowUtils::IsWindowMaximized(partner))
+    {
+        ShowWindow(partner, SW_SHOWNOACTIVATE); // The layout skips maximized windows
+    }
+
+    target->DockPair(window, partner, first, sideBySide);
+
+    // Placing a window restores it, which activates it: bring the clicked window to the front. The placement is
+    // asynchronous, so a partner app that is slow to handle it can still come in front afterwards.
+    FancyZonesWindowUtils::SwitchToWindow(window);
     UpdateCaptionButtons();
 }
 
