@@ -288,9 +288,23 @@ namespace
         return FancyZonesSettings::settings().dockGap;
     }
 
-    std::optional<Dock::Target> DockTarget(Dock::Tree& tree, const RECT& area, POINT pt, bool edgesOnly)
+    RECT InsetByMargins(const RECT& full) noexcept
     {
         const auto& settings = FancyZonesSettings::settings();
+        const RECT inset{ full.left + settings.dockMarginLeft, full.top + settings.dockMarginTop, full.right - settings.dockMarginRight, full.bottom - settings.dockMarginBottom };
+        return inset.right > inset.left && inset.bottom > inset.top ? inset : full; // Margins that leave nothing are ignored
+    }
+
+    // full is the whole work area: the cursor in a margin still docks, as at the edge
+    std::optional<Dock::Target> DockTarget(Dock::Tree& tree, const RECT& full, POINT pt, bool edgesOnly)
+    {
+        const auto& settings = FancyZonesSettings::settings();
+        const RECT area = InsetByMargins(full);
+        if (PtInRect(&full, pt))
+        {
+            pt.x = std::clamp(pt.x, area.left, area.right - 1);
+            pt.y = std::clamp(pt.y, area.top, area.bottom - 1);
+        }
 
         // ponytail: no docking when one work area spans all monitors, halves would straddle the bezels. Dock per monitor inside the span if that mode is ever wanted.
         if (settings.spanZonesAcrossMonitors)
@@ -302,6 +316,11 @@ namespace
     }
     // SizeWindowToRect moves windows asynchronously: a window isn't where it was sent right away
     constexpr ULONGLONG PlacementSettleMillis = 1000;
+}
+
+RECT WorkArea::DockArea() const noexcept
+{
+    return InsetByMargins({ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() });
 }
 
 Dock::Tree& WorkArea::DockTree() const
@@ -316,7 +335,7 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow, bool edgesOnly)
         return;
     }
 
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() }; // Whole work area, for the edge glow
     const auto target = DockTarget(DockTree(), area, pt, edgesOnly);
 
     // Glow on the nearest work area edge, stronger the closer the cursor gets to the dock band
@@ -407,7 +426,7 @@ void WorkArea::DockAtEdge(HWND window, Dock::Edge edge)
     auto& tree = DockTree();
     tree.Remove(window);
 
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     tree.InsertAtEdge(window, get_process_path(window), area, DockGap(), edge);
     ApplyDockLayout();
     DockLayouts::instance().SaveData();
@@ -426,7 +445,7 @@ void WorkArea::DockPair(HWND window, HWND partner, bool windowFirst, bool sideBy
 
 Dock::Edge WorkArea::DockSide(HWND window)
 {
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     for (const auto& [docked, rect] : DockTree().WindowRects(area, DockGap()))
     {
         if (docked == window)
@@ -443,7 +462,7 @@ void WorkArea::DockOnSide(HWND window, Dock::Edge side)
     auto& tree = DockTree();
     tree.Remove(window);
 
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     const auto slot = tree.AutoTarget(area, DockGap(), nullptr);
     tree.Insert(window, get_process_path(window), slot && slot->fill ? slot.value() : Dock::Target{ .node = nullptr, .edge = side });
     ApplyDockLayout();
@@ -453,7 +472,7 @@ void WorkArea::DockOnSide(HWND window, Dock::Edge side)
 bool WorkArea::DockAuto(HWND window, HWND focused)
 {
     auto& tree = DockTree();
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     const auto target = tree.AutoTarget(area, DockGap(), focused);
     if (!target)
     {
@@ -470,7 +489,7 @@ bool WorkArea::DockAuto(HWND window, HWND focused)
 bool WorkArea::DockExpand(HWND window, bool apply)
 {
     auto& tree = DockTree();
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     if (!apply && tree.Clone().Expand(window, L"", area, DockGap()))
     {
         return true;
@@ -502,7 +521,7 @@ bool WorkArea::DockExpand(HWND window, bool apply)
 
 bool WorkArea::DockToggleSplit(HWND window)
 {
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     if (!DockTree().ToggleSplit(window, area, DockGap()))
     {
         return false;
@@ -516,7 +535,7 @@ bool WorkArea::DockToggleSplit(HWND window)
 
 bool WorkArea::DockGrow(HWND window, bool sideBySide, LONG delta)
 {
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     if (!DockTree().Grow(window, area, DockGap(), sideBySide, delta))
     {
         return false;
@@ -529,7 +548,7 @@ bool WorkArea::DockGrow(HWND window, bool sideBySide, LONG delta)
 
 bool WorkArea::DockMove(HWND window, Dock::Edge direction)
 {
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     if (!DockTree().Move(window, area, DockGap(), direction))
     {
         return false;
@@ -568,7 +587,7 @@ bool WorkArea::DockResized(HWND window, const RECT& fromScreenRect)
         MapWindowRect(nullptr, m_window, &fromRect);
         MapWindowRect(nullptr, m_window, &rect);
 
-        const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+        const RECT area = DockArea();
         if (tree.Resize(window, area, DockGap(), fromRect, rect))
         {
             DockLayouts::instance().SaveData();
@@ -671,7 +690,7 @@ void WorkArea::ApplyDockLayout()
         tree.Remove(window);
     }
 
-    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const RECT area = DockArea();
     for (const auto& [window, rect] : tree.WindowRects(area, DockGap()))
     {
         if (auto leaf = tree.Find(window); leaf && leaf->placedAt == 0)

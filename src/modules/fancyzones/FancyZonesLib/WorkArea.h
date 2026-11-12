@@ -47,7 +47,10 @@ public:
     const HWND GetWorkAreaWindow() const noexcept { return m_window; }
     const GUID GetLayoutId() const noexcept;
     const FancyZonesUtils::Rect& GetWorkAreaRect() const noexcept { return m_workAreaRect; }
-    
+
+    // Where docked windows go: the work area, in its own coordinates, less the margins
+    RECT DockArea() const noexcept;
+
     void InitLayout();
     void InitSnappedWindows();
     void UpdateWindowPositions();

@@ -2568,7 +2568,7 @@ void FancyZones::DockFocusByKey(DWORD vkCode) noexcept
         }
 
         const auto& workAreaRect = workArea->GetWorkAreaRect();
-        const RECT area{ 0, 0, workAreaRect.width(), workAreaRect.height() };
+        const RECT area = workArea->DockArea();
         for (auto [placedWindow, rect] : workArea->DockTree().WindowRects(area, FancyZonesSettings::settings().dockGap))
         {
             OffsetRect(&rect, workAreaRect.left(), workAreaRect.top());

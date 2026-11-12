@@ -75,6 +75,10 @@ struct Settings
     bool dockEdgeSnap = true; // A window dragged to the left or right edge docks there without Shift, like Windows snap
     int dockEdgeSnapBand = 12; // Pixels from that edge within which it docks
     int dockGap = 8; // Pixels left between docked windows
+    int dockMarginLeft = 0; // Pixels kept free between docked windows and each work area edge
+    int dockMarginTop = 0;
+    int dockMarginRight = 0;
+    int dockMarginBottom = 0;
     int dockEdgeBand = 48; // Pixels from a work area edge within which a window docks against the whole work area
     int dockWindowEdgePercent = 30; // Share of a docked window, from each of its edges, within which a window docks against it
     bool layoutNameLabelEnabled = true;

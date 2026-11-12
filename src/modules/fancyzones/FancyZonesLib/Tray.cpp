@@ -3,6 +3,8 @@
 
 #include <KnownFolders.h>
 #include <ShlObj.h>
+#include <CommCtrl.h>
+#pragma comment(lib, "comctl32.lib")
 
 #include <common/SettingsAPI/settings_helpers.h>
 #include <common/logger/logger.h>
@@ -42,8 +44,24 @@ namespace
         const wchar_t* label;
     };
 
-    const Choice GapChoices[] = { { 0, L"None" }, { 4, L"4 pixels" }, { 8, L"8 pixels" }, { 12, L"12 pixels" }, { 16, L"16 pixels" }, { 24, L"24 pixels" } };
     const Choice PageChoices[] = { { 1, L"1 (no scrolling)" }, { 2, L"2" }, { 3, L"3" }, { MaxDesktopScrollPages, L"4" } };
+
+    // One slider each in the gap and margins dialog; settings.json allows more than the sliders reach
+    struct Spacing
+    {
+        const wchar_t* id;
+        const wchar_t* label;
+        int Settings::*value;
+        int max;
+    };
+
+    const Spacing Spacings[] = {
+        { NonLocalizable::DockGapID, L"Gap", &Settings::dockGap, 30 },
+        { NonLocalizable::DockMarginLeftID, L"Left", &Settings::dockMarginLeft, 15 },
+        { NonLocalizable::DockMarginTopID, L"Top", &Settings::dockMarginTop, 15 },
+        { NonLocalizable::DockMarginRightID, L"Right", &Settings::dockMarginRight, 15 },
+        { NonLocalizable::DockMarginBottomID, L"Bottom", &Settings::dockMarginBottom, 15 },
+    };
 
     enum Command : UINT
     {
@@ -52,8 +70,8 @@ namespace
         Help,
         Quit,
         SaveLayoutCommand,
+        SpacingCommand,
         ToggleBase = 100,
-        GapBase = 200,
         PagesBase = 300,
         LayoutBase = 400,
     };
@@ -172,51 +190,160 @@ namespace
         return TRUE;
     }
 
-    // A dialog asking for a layout name, built in memory: the module has no dialog resources. Empty when cancelled.
-    std::wstring AskLayoutName()
+    // A dialog template built in memory: the module has no dialog resources
+    struct DialogBuilder
     {
         std::vector<WORD> buffer;
-        const auto align = [&] {
+
+        void Align()
+        {
             if (buffer.size() % 2)
             {
                 buffer.push_back(0);
             }
-        };
-        const auto add = [&](const void* data, size_t bytes) {
+        }
+
+        void Add(const void* data, size_t bytes)
+        {
             const auto words = static_cast<const WORD*>(data);
             buffer.insert(buffer.end(), words, words + bytes / sizeof(WORD));
-        };
-        const auto addText = [&](const wchar_t* text) { add(text, (wcslen(text) + 1) * sizeof(wchar_t)); };
-        const auto addItem = [&](DWORD style, short x, short y, short cx, short cy, WORD id, WORD kind, const wchar_t* text) {
-            align();
-            DLGITEMTEMPLATE item{ .style = style | WS_CHILD | WS_VISIBLE, .x = x, .y = y, .cx = cx, .cy = cy, .id = id };
-            add(&item, sizeof(item));
-            buffer.push_back(0xFFFF);
-            buffer.push_back(kind);
-            addText(text);
-            buffer.push_back(0); // No creation data
-        };
+        }
+
+        void AddText(const wchar_t* text) { Add(text, (wcslen(text) + 1) * sizeof(wchar_t)); }
 
         // In the taskbar, so that it can be found again once covered
-        DLGTEMPLATE header{ .style = DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU, .dwExtendedStyle = WS_EX_APPWINDOW, .cdit = 4, .cx = 220, .cy = 72 };
-        add(&header, sizeof(header));
-        buffer.push_back(0); // No menu
-        buffer.push_back(0); // The standard dialog class
-        addText(L"Save layout");
-        buffer.push_back(9);
-        addText(L"Segoe UI");
-        addItem(0, 8, 8, 204, 10, static_cast<WORD>(-1), 0x0082, L"Name for the windows docked now, on every monitor:");
-        addItem(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 8, 22, 204, 14, NameEditId, 0x0081, L"");
-        addItem(WS_TABSTOP | BS_DEFPUSHBUTTON, 108, 48, 50, 14, IDOK, 0x0080, L"Save");
-        addItem(WS_TABSTOP | BS_PUSHBUTTON, 162, 48, 50, 14, IDCANCEL, 0x0080, L"Cancel");
+        DialogBuilder(const wchar_t* title, WORD items, short cx, short cy)
+        {
+            DLGTEMPLATE header{ .style = DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU, .dwExtendedStyle = WS_EX_APPWINDOW, .cdit = items, .cx = cx, .cy = cy };
+            Add(&header, sizeof(header));
+            buffer.push_back(0); // No menu
+            buffer.push_back(0); // The standard dialog class
+            AddText(title);
+            buffer.push_back(9);
+            AddText(L"Segoe UI");
+        }
+
+        // A control of a standard class: 0x0080 button, 0x0081 edit, 0x0082 static
+        void AddItem(DWORD style, short x, short y, short cx, short cy, WORD id, WORD kind, const wchar_t* text)
+        {
+            BeginItem(style, x, y, cx, cy, id);
+            buffer.push_back(0xFFFF);
+            buffer.push_back(kind);
+            EndItem(text);
+        }
+
+        // A control of a registered class, by name
+        void AddItem(DWORD style, short x, short y, short cx, short cy, WORD id, const wchar_t* className, const wchar_t* text)
+        {
+            BeginItem(style, x, y, cx, cy, id);
+            AddText(className);
+            EndItem(text);
+        }
+
+        void BeginItem(DWORD style, short x, short y, short cx, short cy, WORD id)
+        {
+            Align();
+            DLGITEMTEMPLATE item{ .style = style | WS_CHILD | WS_VISIBLE, .x = x, .y = y, .cx = cx, .cy = cy, .id = id };
+            Add(&item, sizeof(item));
+        }
+
+        void EndItem(const wchar_t* text)
+        {
+            AddText(text);
+            buffer.push_back(0); // No creation data
+        }
+
+        INT_PTR Run(DLGPROC proc, LPARAM param) { return DialogBoxIndirectParamW(s_instance, reinterpret_cast<DLGTEMPLATE*>(buffer.data()), s_window, proc, param); }
+    };
+
+    // A dialog asking for a layout name. Empty when cancelled.
+    std::wstring AskLayoutName()
+    {
+        DialogBuilder dialog(L"Save layout", 4, 220, 72);
+        dialog.AddItem(0, 8, 8, 204, 10, static_cast<WORD>(-1), 0x0082, L"Name for the windows docked now, on every monitor:");
+        dialog.AddItem(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 8, 22, 204, 14, NameEditId, 0x0081, L"");
+        dialog.AddItem(WS_TABSTOP | BS_DEFPUSHBUTTON, 108, 48, 50, 14, IDOK, 0x0080, L"Save");
+        dialog.AddItem(WS_TABSTOP | BS_PUSHBUTTON, 162, 48, 50, 14, IDCANCEL, 0x0080, L"Cancel");
 
         std::wstring name;
-        if (DialogBoxIndirectParamW(s_instance, reinterpret_cast<DLGTEMPLATE*>(buffer.data()), s_window, NameDialogProc, reinterpret_cast<LPARAM>(&name)) != IDOK)
+        if (dialog.Run(NameDialogProc, reinterpret_cast<LPARAM>(&name)) != IDOK)
         {
             name.clear();
         }
 
         return name;
+    }
+
+    constexpr int SliderId = 300; // + index into Spacings
+    constexpr int ValueId = 320; // + index into Spacings
+
+    INT_PTR CALLBACK SpacingDialogProc(HWND dialog, UINT message, WPARAM wparam, LPARAM) noexcept
+    {
+        // The values as last saved, so a drag writes settings.json once per step and not once per message
+        static int saved[std::size(Spacings)];
+        static bool failed;
+
+        const auto position = [&](size_t i) { return static_cast<int>(SendDlgItemMessageW(dialog, SliderId + static_cast<int>(i), TBM_GETPOS, 0, 0)); };
+        const auto showValue = [&](size_t i) { SetDlgItemTextW(dialog, ValueId + static_cast<int>(i), (std::to_wstring(position(i)) + L" px").c_str()); };
+
+        if (message == WM_INITDIALOG)
+        {
+            failed = false;
+            const auto& settings = FancyZonesSettings::settings();
+            for (size_t i = 0; i < std::size(Spacings); ++i)
+            {
+                const int slider = SliderId + static_cast<int>(i);
+                SendDlgItemMessageW(dialog, slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, Spacings[i].max));
+                SendDlgItemMessageW(dialog, slider, TBM_SETPOS, TRUE, (std::min)(settings.*Spacings[i].value, Spacings[i].max));
+                saved[i] = position(i);
+                showValue(i);
+            }
+
+            SetForegroundWindow(dialog);
+            return TRUE;
+        }
+
+        // Every step of a drag is applied right away: the file watcher reloads the settings
+        if (message == WM_HSCROLL)
+        {
+            for (size_t i = 0; i < std::size(Spacings); ++i)
+            {
+                showValue(i);
+                if (position(i) != saved[i])
+                {
+                    saved[i] = position(i);
+                    failed |= !FancyZonesSettings::SaveValue(Spacings[i].id, json::value(saved[i]));
+                }
+            }
+
+            return TRUE;
+        }
+
+        if (message == WM_COMMAND && (LOWORD(wparam) == IDOK || LOWORD(wparam) == IDCANCEL))
+        {
+            EndDialog(dialog, failed);
+            return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    // Sliders for the gap and the margins. Returns false when settings.json couldn't be saved.
+    bool EditSpacing()
+    {
+        InitCommonControls(); // The trackbar class
+        constexpr short row = 20;
+        DialogBuilder dialog(L"Gap and margins", static_cast<WORD>(std::size(Spacings) * 3 + 1), 220, static_cast<short>(std::size(Spacings) * row + 36));
+        for (size_t i = 0; i < std::size(Spacings); ++i)
+        {
+            const short y = static_cast<short>(8 + i * row);
+            dialog.AddItem(0, 8, y + 2, 40, 10, static_cast<WORD>(-1), 0x0082, Spacings[i].label);
+            dialog.AddItem(WS_TABSTOP | TBS_AUTOTICKS, 50, y, 124, 14, static_cast<WORD>(SliderId + i), L"msctls_trackbar32", L"");
+            dialog.AddItem(SS_RIGHT, 178, y + 2, 34, 10, static_cast<WORD>(ValueId + i), 0x0082, L"");
+        }
+
+        dialog.AddItem(WS_TABSTOP | BS_DEFPUSHBUTTON, 162, static_cast<short>(std::size(Spacings) * row + 14), 50, 14, IDOK, 0x0080, L"Close");
+        return dialog.Run(SpacingDialogProc, 0) == 0;
     }
 
     // Runs "Muntin.exe save <name>", which also makes the Start menu shortcut, see main.cpp. Names can't hold quotes.
@@ -270,7 +397,7 @@ namespace
             AppendMenuW(menu, MF_STRING | (settings.*Toggles[i].value ? MF_CHECKED : 0), static_cast<UINT_PTR>(ToggleBase) + i, Toggles[i].label);
         }
 
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(GapChoices, std::size(GapChoices), settings.dockGap, GapBase)), L"Gap between windows");
+        AppendMenuW(menu, MF_STRING, SpacingCommand, L"Gap and margins...");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(PageChoices, std::size(PageChoices), settings.desktopScrollPages, PagesBase)), L"Desktop pages per monitor");
 
         HMENU layoutMenu = CreatePopupMenu();
@@ -310,13 +437,13 @@ namespace
         {
             LoadLayout(layouts[command - LayoutBase]);
         }
+        else if (command == SpacingCommand)
+        {
+            saved = EditSpacing();
+        }
         else if (command >= PagesBase && command - PagesBase < std::size(PageChoices))
         {
             saved = FancyZonesSettings::SaveValue(NonLocalizable::DesktopScrollPagesID, json::value(PageChoices[command - PagesBase].value));
-        }
-        else if (command >= GapBase && command - GapBase < std::size(GapChoices))
-        {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::DockGapID, json::value(GapChoices[command - GapBase].value));
         }
         else if (command >= ToggleBase && command - ToggleBase < std::size(Toggles))
         {

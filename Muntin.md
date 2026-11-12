@@ -149,11 +149,12 @@ The tray menu (right-click the Muntin icon) turns the most used settings on and 
 
 ### Docking
 
-These three settings exist only in the fork.
+These settings exist only in the fork.
 
 | Setting | Meaning | Default | Allowed |
 |---|---|---|---|
 | `fancyzones_dockGap` | Pixels left between docked windows. A change is applied to the docked windows at once. | 8 | 0 to 100 |
+| `fancyzones_dockMarginLeft`, `fancyzones_dockMarginTop`, `fancyzones_dockMarginRight`, `fancyzones_dockMarginBottom` | Pixels kept free between docked windows and that edge of the screen's work area. The tray menu's "Gap and margins..." has sliders (margins 0 to 15, gap 0 to 30) that apply as you drag; the file allows more. A change is applied at once. Margins that leave no room are ignored. | 0 | 0 to 500 |
 | `fancyzones_dockEdgeBand` | How close to a screen edge, in pixels, the cursor must be for the window to take half of the screen | 48 | 8 to 500 |
 | `fancyzones_dockWindowEdgePercent` | How far into a docked window, in percent from each of its edges, the cursor splits that window. The rest of the window is the middle, where nothing happens. | 30 | 5 to 50 |
 

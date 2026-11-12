@@ -94,6 +94,10 @@ namespace NonLocalizable
     const wchar_t DockEdgeSnapID[] = L"fancyzones_dockEdgeSnap";
     const wchar_t DockEdgeSnapBandID[] = L"fancyzones_dockEdgeSnapBand";
     const wchar_t DockGapID[] = L"fancyzones_dockGap";
+    const wchar_t DockMarginLeftID[] = L"fancyzones_dockMarginLeft";
+    const wchar_t DockMarginTopID[] = L"fancyzones_dockMarginTop";
+    const wchar_t DockMarginRightID[] = L"fancyzones_dockMarginRight";
+    const wchar_t DockMarginBottomID[] = L"fancyzones_dockMarginBottom";
     const wchar_t DockEdgeBandID[] = L"fancyzones_dockEdgeBand";
     const wchar_t DockWindowEdgePercentID[] = L"fancyzones_dockWindowEdgePercent";
     const wchar_t ShowZoneNumberID[] = L"fancyzones_showZoneNumber";

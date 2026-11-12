@@ -187,6 +187,20 @@ void FancyZonesSettings::LoadSettings()
             m_settings.dockGap = std::clamp(*val, 0, 100);
         }
 
+        const std::pair<const wchar_t*, int*> margins[] = {
+            { NonLocalizable::DockMarginLeftID, &m_settings.dockMarginLeft },
+            { NonLocalizable::DockMarginTopID, &m_settings.dockMarginTop },
+            { NonLocalizable::DockMarginRightID, &m_settings.dockMarginRight },
+            { NonLocalizable::DockMarginBottomID, &m_settings.dockMarginBottom },
+        };
+        for (const auto& [id, margin] : margins)
+        {
+            if (auto val = values.get_int_value(id))
+            {
+                *margin = std::clamp(*val, 0, 500);
+            }
+        }
+
         if (auto val = values.get_int_value(NonLocalizable::DockEdgeBandID))
         {
             m_settings.dockEdgeBand = std::clamp(*val, 8, 500);
