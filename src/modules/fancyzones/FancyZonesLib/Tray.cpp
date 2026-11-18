@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "Tray.h"
 
+#include <mutex>
+#include <thread>
 #include <KnownFolders.h>
 #include <ShlObj.h>
 #include <CommCtrl.h>
@@ -71,9 +73,9 @@ namespace
         Quit,
         SaveLayoutCommand,
         SpacingCommand,
+        LoadLayoutCommand,
         ToggleBase = 100,
         PagesBase = 300,
-        LayoutBase = 400,
     };
 
     HINSTANCE s_instance{};
@@ -371,6 +373,474 @@ namespace
         }
     }
 
+    // The layout picker: a card per saved layout, each monitor drawn as its tree of tiles holding the apps' icons
+    constexpr wchar_t PickerClassName[] = L"MuntinLayoutPicker";
+    constexpr int TileW = 128, TileH = 72, Pad = 12, NameH = 22, Between = 8, CardGap = 12, MaxRow = 760, CloseSize = 18;
+    constexpr DWORD PickerStyle = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    constexpr DWORD PickerExStyle = WS_EX_APPWINDOW;
+
+    struct Card
+    {
+        std::wstring name;
+        std::vector<Dock::Tree> monitors;
+        RECT rect{};
+    };
+
+    // Icons come from a worker thread: the shell can be slow (a network drive, a cold packaged app), and this thread
+    // services the mouse and keyboard hooks, which Windows removes when they stall. Shared with the worker, which can outlive the picker.
+    struct IconStore
+    {
+        std::mutex lock;
+        std::map<std::wstring, HICON> icons; // by what starts the app
+        bool closed{};
+    };
+
+    struct Picker
+    {
+        std::vector<Card> cards;
+        std::shared_ptr<IconStore> store;
+        HWND window{};
+        HFONT font{};
+        int dpi{ 96 };
+        int hover{ -1 };
+        bool overClose{};
+        bool tracking{};
+        bool open{};
+        std::wstring choice;
+    } s_picker;
+
+    int Scale(int value) noexcept { return MulDiv(value, s_picker.dpi, 96); }
+
+    const std::wstring& StartOf(const Dock::Node& leaf) noexcept { return leaf.launch.empty() ? leaf.app : leaf.launch; }
+
+    HICON IconFor(const Dock::Node& leaf)
+    {
+        std::lock_guard guard(s_picker.store->lock);
+        const auto entry = s_picker.store->icons.find(StartOf(leaf));
+        return entry == s_picker.store->icons.end() ? nullptr : entry->second;
+    }
+
+    void LoadIcons(std::shared_ptr<IconStore> store, std::vector<std::wstring> paths, HWND window)
+    {
+        const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+        for (const auto& path : paths)
+        {
+            HICON icon = nullptr;
+            PIDLIST_ABSOLUTE pidl{};
+            if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)))
+            {
+                SHFILEINFOW info{};
+                if (SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_ICON | SHGFI_LARGEICON))
+                {
+                    icon = info.hIcon;
+                }
+
+                CoTaskMemFree(pidl);
+            }
+
+            if (!icon)
+            {
+                continue;
+            }
+
+            {
+                std::lock_guard guard(store->lock);
+                if (store->closed)
+                {
+                    DestroyIcon(icon);
+                    continue;
+                }
+
+                store->icons[path] = icon;
+            }
+
+            PostMessageW(window, WM_APP, 0, 0); // Repaint
+        }
+
+        if (com)
+        {
+            CoUninitialize();
+        }
+    }
+
+    // Sets the card rects, cards wrap at MaxRow. Returns the client size. ponytail: no scrolling, add when layouts outgrow the screen
+    SIZE LayoutCards()
+    {
+        int x = Scale(CardGap), y = Scale(CardGap), rowHeight = 0, width = 0;
+        for (auto& card : s_picker.cards)
+        {
+            const int count = static_cast<int>(card.monitors.size());
+            const int w = Scale(2 * Pad + count * TileW + (count - 1) * Between);
+            const int h = Scale(2 * Pad + TileH + NameH);
+            if (x > Scale(CardGap) && x + w > Scale(MaxRow))
+            {
+                x = Scale(CardGap);
+                y += rowHeight + Scale(CardGap);
+                rowHeight = 0;
+            }
+
+            card.rect = { x, y, x + w, y + h };
+            x += w + Scale(CardGap);
+            rowHeight = (std::max)(rowHeight, h);
+            width = (std::max)(width, x);
+        }
+
+        return { (std::max)(width, static_cast<int>(Scale(280))), (std::max)(y + rowHeight + Scale(CardGap), static_cast<int>(Scale(100))) };
+    }
+
+    RECT MonitorRect(const Card& card, size_t index)
+    {
+        const int left = card.rect.left + Scale(Pad) + static_cast<int>(index) * Scale(TileW + Between);
+        const int top = card.rect.top + Scale(Pad);
+        return { left, top, left + Scale(TileW), top + Scale(TileH) };
+    }
+
+    RECT CloseRect(const Card& card)
+    {
+        const int size = Scale(CloseSize);
+        const int right = card.rect.right - Scale(6);
+        const int top = card.rect.bottom - Scale(Pad) - Scale(NameH) + (Scale(NameH) - size) / 2 + Scale(4);
+        return { right - size, top, right, top + size };
+    }
+
+    void DrawNode(HDC dc, const Dock::Node& node, RECT rect)
+    {
+        if (!node.IsLeaf())
+        {
+            RECT a = rect, b = rect;
+            if (node.sideBySide)
+            {
+                a.right = b.left = rect.left + static_cast<LONG>((rect.right - rect.left) * node.ratio);
+            }
+            else
+            {
+                a.bottom = b.top = rect.top + static_cast<LONG>((rect.bottom - rect.top) * node.ratio);
+            }
+
+            DrawNode(dc, *node.first, a);
+            DrawNode(dc, *node.second, b);
+            return;
+        }
+
+        InflateRect(&rect, -Scale(1), -Scale(1)); // Two neighbors leave a gap of two pixels
+        FillRect(dc, &rect, GetSysColorBrush(COLOR_WINDOW));
+        if (const HICON icon = IconFor(node))
+        {
+            const int size = (std::min)({ Scale(32), static_cast<int>(rect.right - rect.left) - Scale(4), static_cast<int>(rect.bottom - rect.top) - Scale(4) });
+            if (size >= Scale(12))
+            {
+                DrawIconEx(dc, (rect.left + rect.right - size) / 2, (rect.top + rect.bottom - size) / 2, icon, size, size, 0, nullptr, DI_NORMAL);
+            }
+        }
+    }
+
+    void PaintPicker(HWND window)
+    {
+        PAINTSTRUCT paint;
+        const HDC target = BeginPaint(window, &paint);
+        RECT client;
+        GetClientRect(window, &client);
+
+        const HDC dc = CreateCompatibleDC(target);
+        const HBITMAP bitmap = CreateCompatibleBitmap(target, client.right, client.bottom);
+        const HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
+        const HGDIOBJ oldFont = SelectObject(dc, s_picker.font);
+        SetBkMode(dc, TRANSPARENT);
+        FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
+
+        if (s_picker.cards.empty())
+        {
+            SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+            DrawTextW(dc, L"No layouts saved yet", -1, &client, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+
+        for (size_t i = 0; i < s_picker.cards.size(); ++i)
+        {
+            const Card& card = s_picker.cards[i];
+            const bool hot = static_cast<int>(i) == s_picker.hover;
+            FillRect(dc, &card.rect, GetSysColorBrush(hot ? COLOR_HIGHLIGHT : COLOR_BTNFACE));
+            for (size_t m = 0; m < card.monitors.size(); ++m)
+            {
+                RECT screen = MonitorRect(card, m);
+                FillRect(dc, &screen, GetSysColorBrush(COLOR_3DSHADOW));
+                InflateRect(&screen, -Scale(2), -Scale(2));
+                DrawNode(dc, *card.monitors[m].root, screen);
+            }
+
+            const RECT close = CloseRect(card);
+            RECT text{ card.rect.left + Scale(Pad), card.rect.top + Scale(Pad + TileH + 4), close.left - Scale(4), card.rect.bottom - Scale(4) };
+            SetTextColor(dc, GetSysColor(hot ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+            DrawTextW(dc, card.name.c_str(), -1, &text, DT_END_ELLIPSIS | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            if (hot)
+            {
+                RECT x = close;
+                if (s_picker.overClose)
+                {
+                    FillRect(dc, &x, GetSysColorBrush(COLOR_WINDOW));
+                    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+                }
+
+                DrawTextW(dc, L"×", -1, &x, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
+
+        BitBlt(target, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldFont);
+        SelectObject(dc, oldBitmap);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+        EndPaint(window, &paint);
+    }
+
+    // The card under the point, or -1
+    int HitCard(POINT at, bool& onClose)
+    {
+        for (size_t i = 0; i < s_picker.cards.size(); ++i)
+        {
+            if (PtInRect(&s_picker.cards[i].rect, at))
+            {
+                const RECT close = CloseRect(s_picker.cards[i]);
+                onClose = PtInRect(&close, at);
+                return static_cast<int>(i);
+            }
+        }
+
+        onClose = false;
+        return -1;
+    }
+
+    void ResizePicker(HWND window)
+    {
+        const SIZE client = LayoutCards();
+        RECT frame{ 0, 0, client.cx, client.cy };
+        AdjustWindowRectExForDpi(&frame, PickerStyle, FALSE, PickerExStyle, s_picker.dpi);
+        SetWindowPos(window, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        InvalidateRect(window, nullptr, FALSE);
+    }
+
+    // The same as "Muntin.exe delete <name>" (see main.cpp), but with the result at hand
+    void DeleteCard(HWND window, size_t index)
+    {
+        const std::wstring name = s_picker.cards[index].name;
+        if (MessageBoxW(window, (L"Delete the layout " + name + L"?").c_str(), L"Muntin", MB_YESNO | MB_ICONQUESTION) != IDYES)
+        {
+            return;
+        }
+
+        const HWND fancyZones = FindWindowW(DockCommands::WindowClassName, nullptr);
+        std::wstring text = L"delete\n" + name;
+        COPYDATASTRUCT data{ .dwData = DockCommands::CopyDataId, .cbData = static_cast<DWORD>(text.size() * sizeof(wchar_t)), .lpData = text.data() };
+        if (!fancyZones || !SendMessageW(fancyZones, WM_COPYDATA, reinterpret_cast<WPARAM>(s_window), reinterpret_cast<LPARAM>(&data)))
+        {
+            Tray::Notify(L"The layout couldn't be deleted.");
+            return;
+        }
+
+        wil::unique_cotaskmem_string programs;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Programs, 0, nullptr, &programs)))
+        {
+            DeleteFileW((std::wstring{ programs.get() } + L"\\Muntin\\" + name + L".lnk").c_str()); // The Start menu shortcut
+        }
+
+        s_picker.cards.erase(s_picker.cards.begin() + index);
+        s_picker.hover = -1;
+        ResizePicker(window);
+    }
+
+    LRESULT CALLBACK PickerProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept
+    {
+        switch (message)
+        {
+        case WM_PAINT:
+            PaintPicker(window);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_APP: // An icon arrived
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        case WM_MOUSEMOVE:
+        {
+            if (!s_picker.tracking)
+            {
+                TRACKMOUSEEVENT track{ .cbSize = sizeof(track), .dwFlags = TME_LEAVE, .hwndTrack = window };
+                s_picker.tracking = TrackMouseEvent(&track);
+            }
+
+            bool onClose = false;
+            const int hover = HitCard(POINT{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) }, onClose);
+            if (hover != s_picker.hover || onClose != s_picker.overClose)
+            {
+                s_picker.hover = hover;
+                s_picker.overClose = onClose;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            s_picker.tracking = false;
+            s_picker.hover = -1;
+            s_picker.overClose = false;
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        case WM_SETCURSOR:
+            if (LOWORD(lparam) == HTCLIENT && s_picker.hover >= 0)
+            {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+
+            break;
+        case WM_LBUTTONUP:
+        {
+            bool onClose = false;
+            const int index = HitCard(POINT{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) }, onClose);
+            if (index >= 0 && onClose)
+            {
+                DeleteCard(window, index);
+            }
+            else if (index >= 0)
+            {
+                s_picker.choice = s_picker.cards[index].name;
+                DestroyWindow(window);
+            }
+
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wparam == VK_ESCAPE)
+            {
+                DestroyWindow(window);
+            }
+            else if (wparam == VK_DELETE && s_picker.hover >= 0)
+            {
+                DeleteCard(window, s_picker.hover);
+            }
+
+            return 0;
+        case WM_DESTROY:
+            s_picker.open = false;
+            return 0;
+        }
+
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    // Opens the picker, runs it until it closes, then loads the layout that was chosen
+    void PickLayout()
+    {
+        s_picker = {};
+        s_picker.store = std::make_shared<IconStore>();
+        s_picker.dpi = static_cast<int>(GetDpiForSystem());
+        NONCLIENTMETRICSW metrics{ .cbSize = sizeof(metrics) };
+        SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, s_picker.dpi);
+        s_picker.font = CreateFontIndirectW(&metrics.lfMessageFont);
+
+        for (const auto& name : LayoutNames())
+        {
+            Card card{ .name = name };
+            for (auto& [key, tree] : DockLayouts::instance().Named(name))
+            {
+                if (tree.root)
+                {
+                    card.monitors.push_back(std::move(tree));
+                }
+            }
+
+            if (!card.monitors.empty())
+            {
+                s_picker.cards.push_back(std::move(card));
+            }
+        }
+
+        static bool registered = false;
+        if (!registered)
+        {
+            WNDCLASSEXW wcex{ .cbSize = sizeof(WNDCLASSEXW), .lpfnWndProc = PickerProc, .hInstance = s_instance, .hCursor = LoadCursorW(nullptr, IDC_ARROW), .lpszClassName = PickerClassName };
+            registered = RegisterClassExW(&wcex) != 0;
+        }
+
+        const SIZE client = LayoutCards();
+        RECT frame{ 0, 0, client.cx, client.cy };
+        AdjustWindowRectExForDpi(&frame, PickerStyle, FALSE, PickerExStyle, s_picker.dpi);
+
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        MONITORINFO monitor{ .cbSize = sizeof(monitor) };
+        GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &monitor);
+        const int width = frame.right - frame.left, height = frame.bottom - frame.top;
+        // Kept on screen, so that the title bar stays reachable
+        const int x = (std::max)(static_cast<int>(monitor.rcWork.left), static_cast<int>(monitor.rcWork.left + (monitor.rcWork.right - monitor.rcWork.left - width) / 2));
+        const int y = (std::max)(static_cast<int>(monitor.rcWork.top), static_cast<int>(monitor.rcWork.top + (monitor.rcWork.bottom - monitor.rcWork.top - height) / 2));
+
+        const HWND window = registered ? CreateWindowExW(PickerExStyle, PickerClassName, L"Load layout", PickerStyle, x, y, width, height, s_window, nullptr, s_instance, nullptr) : nullptr;
+        if (window)
+        {
+            s_picker.open = true;
+            s_picker.window = window;
+            ShowWindow(window, SW_SHOW);
+            SetForegroundWindow(window);
+
+            std::vector<std::wstring> paths;
+            for (const auto& card : s_picker.cards)
+            {
+                for (const auto& monitorTree : card.monitors)
+                {
+                    for (const Dock::Node* leaf : monitorTree.Leaves())
+                    {
+                        if (const auto& path = StartOf(*leaf); !path.empty() && std::find(paths.begin(), paths.end(), path) == paths.end())
+                        {
+                            paths.push_back(path);
+                        }
+                    }
+                }
+            }
+
+            std::thread(LoadIcons, s_picker.store, std::move(paths), window).detach();
+
+            MSG msg;
+            while (s_picker.open)
+            {
+                const BOOL got = GetMessageW(&msg, nullptr, 0, 0);
+                if (got <= 0)
+                {
+                    if (got == 0)
+                    {
+                        PostQuitMessage(static_cast<int>(msg.wParam)); // Not ours to swallow
+                    }
+
+                    break;
+                }
+
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+
+            if (IsWindow(window))
+            {
+                DestroyWindow(window);
+            }
+        }
+
+        {
+            // The worker destroys the icons that arrive from now on
+            std::lock_guard guard(s_picker.store->lock);
+            s_picker.store->closed = true;
+            for (const auto& [path, icon] : s_picker.store->icons)
+            {
+                DestroyIcon(icon);
+            }
+        }
+
+        s_picker.window = nullptr;
+        DeleteObject(s_picker.font);
+        if (!s_picker.choice.empty())
+        {
+            LoadLayout(s_picker.choice);
+        }
+    }
+
     HMENU ChoiceMenu(const Choice* choices, size_t count, int current, UINT base)
     {
         HMENU menu = CreatePopupMenu();
@@ -385,7 +855,6 @@ namespace
     void ShowMenu(POINT at) noexcept
     {
         const Settings& settings = FancyZonesSettings::settings();
-        const auto layouts = LayoutNames();
         const auto startup = StartupShortcut();
         const bool startsAtSignIn = !startup.empty() && GetFileAttributesW(startup.c_str()) != INVALID_FILE_ATTRIBUTES;
 
@@ -400,25 +869,8 @@ namespace
         AppendMenuW(menu, MF_STRING, SpacingCommand, L"Gap and margins...");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(PageChoices, std::size(PageChoices), settings.desktopScrollPages, PagesBase)), L"Desktop pages per monitor");
 
-        HMENU layoutMenu = CreatePopupMenu();
-        for (size_t i = 0; i < layouts.size(); ++i)
-        {
-            std::wstring label;
-            for (const wchar_t letter : layouts[i])
-            {
-                label += letter == L'&' ? L"&&" : std::wstring(1, letter); // A single & would underline the next letter
-            }
-
-            AppendMenuW(layoutMenu, MF_STRING, static_cast<UINT_PTR>(LayoutBase) + i, label.c_str());
-        }
-
-        if (layouts.empty())
-        {
-            AppendMenuW(layoutMenu, MF_STRING | MF_GRAYED, 0, L"None saved yet");
-        }
-
         AppendMenuW(menu, MF_STRING, SaveLayoutCommand, L"Save layout...");
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(layoutMenu), L"Load layout");
+        AppendMenuW(menu, MF_STRING, LoadLayoutCommand, L"Load layout...");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING | (startsAtSignIn ? MF_CHECKED : 0), StartAtSignIn, L"Start at sign-in");
         AppendMenuW(menu, MF_STRING, OpenFolder, L"Open settings folder");
@@ -433,9 +885,9 @@ namespace
         DestroyMenu(menu);
 
         bool saved = true;
-        if (command >= LayoutBase && command - LayoutBase < layouts.size())
+        if (command == LoadLayoutCommand)
         {
-            LoadLayout(layouts[command - LayoutBase]);
+            PickLayout();
         }
         else if (command == SpacingCommand)
         {
@@ -482,6 +934,13 @@ namespace
         if (message == WM_TRAY)
         {
             const UINT event = LOWORD(lparam);
+            // A picker lost behind other windows
+            if (s_picker.open && s_picker.window && (event == WM_CONTEXTMENU || event == NIN_SELECT || event == NIN_KEYSELECT))
+            {
+                SetForegroundWindow(s_picker.window);
+                return 0;
+            }
+
             // The icon still hears clicks while the menu's dialogs run their own loops: one menu at a time
             static bool open = false;
             if ((event == WM_CONTEXTMENU || event == NIN_SELECT || event == NIN_KEYSELECT) && !open)
