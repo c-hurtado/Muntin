@@ -167,6 +167,16 @@ void FancyZonesSettings::LoadSettings()
             m_settings.dockAnimation = *val;
         }
 
+        if (auto val = values.get_int_value(NonLocalizable::DockMotionCurveID))
+        {
+            m_settings.dockMotionCurve = std::clamp(*val, 0, 1);
+        }
+
+        if (auto val = values.get_bool_value(NonLocalizable::DockAnticipationID))
+        {
+            m_settings.dockAnticipation = *val;
+        }
+
         if (auto val = values.get_bool_value(NonLocalizable::DockMiddleClickExpandID))
         {
             m_settings.dockMiddleClickExpand = *val;

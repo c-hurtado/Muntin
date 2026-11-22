@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <fstream>
 #include <future>
 #include <map>
@@ -18,6 +19,7 @@
 #include <common/logger/logger.h>
 #include <common/utils/elevation.h>
 
+#include <FancyZonesLib/DockMotion.h>
 #include <FancyZonesLib/ModuleConstants.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/WindowUtils.h>
@@ -31,7 +33,6 @@ namespace
     constexpr UINT WM_SCROLL_WHEEL = WM_APP + 1; // wparam: wheel delta, lparam: cursor
     constexpr UINT WM_SCROLL_FOLLOW = WM_APP + 2; // wparam: the window that became the foreground window
     constexpr UINT WM_SCROLL_RETURN_ALL = WM_APP + 3;
-    constexpr UINT WM_SCROLL_STOP = WM_APP + 4;
     constexpr UINT WM_SCROLL_CARRY_DOWN = WM_APP + 6; // wparam: the monitor, lparam: the window
     constexpr UINT WM_SCROLL_CARRY_UP = WM_APP + 7;
     constexpr UINT WM_SCROLL_REST_ON_PAGE = WM_APP + 5; // wparam: the monitor, lparam: the window that docked
@@ -228,6 +229,7 @@ struct DesktopScroll::Impl
     PageChanged pageChanged;
     HWND window{};
     std::thread thread;
+    std::atomic<DWORD> threadId{}; // The destructor ends the message loop through it, whatever became of the window
     HHOOK mouseHook{};
     HWINEVENTHOOK foregroundHook{};
     std::map<HMONITOR, Screen> screens;
@@ -251,6 +253,7 @@ struct DesktopScroll::Impl
     {
         SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         self = this;
+        threadId = GetCurrentThreadId();
 
         WNDCLASSEXW wcex{};
         wcex.cbSize = sizeof(WNDCLASSEX);
@@ -281,7 +284,7 @@ struct DesktopScroll::Impl
             return;
         }
 
-        RecoverParked();
+        DesktopScroll::RecoverParkedFile();
         mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseProc, GetModuleHandleW(nullptr), 0);
         if (!mouseHook)
         {
@@ -352,9 +355,8 @@ struct DesktopScroll::Impl
         case WM_SCROLL_RETURN_ALL:
             self->RequestReturnAll();
             return 0;
-        case WM_SCROLL_STOP:
-            PostQuitMessage(0);
-            return 0;
+        case WM_CLOSE:
+            return 0; // Not a way to stop the thread: the destructor does that
         default:
             return DefWindowProcW(hwnd, message, wparam, lparam);
         }
@@ -768,6 +770,11 @@ struct DesktopScroll::Impl
 
         bool settling = destination.has_value() || !overlay;
         bool quit = false;
+        // Going to a page: with the ease curve the position follows it over time, instead of closing in by a share per frame
+        const bool easing = destination && FancyZonesSettings::settings().dockMotionCurve == 1;
+        const bool pullBack = FancyZonesSettings::settings().dockAnticipation;
+        const double from = position;
+        const auto started = std::chrono::steady_clock::now();
         while (!quit)
         {
             if (!Pump())
@@ -801,7 +808,16 @@ struct DesktopScroll::Impl
                 settling = true;
             }
 
-            position += (target - position) * (destination || (overview && settling) ? EasePerFrame : GlidePerFrame);
+            if (easing && !settleNow)
+            {
+                const double progress = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() / DockMotion::EaseSeconds;
+                position = from + (target - from) * DockMotion::Ease(progress, pullBack);
+            }
+            else
+            {
+                position += (target - position) * (destination || (overview && settling) ? EasePerFrame : GlidePerFrame);
+            }
+
             if (overview)
             {
                 zoom += ((settling ? 1.0 : DesktopScroll::OverviewZoom) - zoom) * ZoomPerFrame;
@@ -821,7 +837,7 @@ struct DesktopScroll::Impl
 
         const HWND foregroundBefore = GetForegroundWindow();
         const double previousOffset = screen.offset;
-        screen.offset = std::round(quit ? position : target);
+        screen.offset = std::clamp(std::round(quit ? position : target), 0.0, limit);
         const LONG offset = std::lround(screen.offset);
         std::vector<Entry*> shown;
         for (auto& entry : screen.entries)
@@ -1035,38 +1051,39 @@ struct DesktopScroll::Impl
         }
     }
 
-    void RecoverParked() noexcept
-    {
-        try
-        {
-            const auto fileName = ParkedFileName();
-            std::ifstream file(fileName);
-            intptr_t handle{};
-            DWORD process{};
-            Entry entry;
-            Screen screen;
-            while (file >> handle >> process >> entry.left >> entry.canvasTop >> entry.width >> entry.height >> entry.normal.left >> entry.normal.top >> entry.normal.right >> entry.normal.bottom >> entry.maximized >> entry.maximizedTop >> entry.parkedTop >> screen.top >> screen.height >> screen.offset)
-            {
-                entry.window = reinterpret_cast<HWND>(handle);
-                RECT rect{};
-                DWORD owner{};
-                // Handles get reused: only a window of that process where the scroll left it is one of ours
-                const LONG top = entry.canvasTop - std::lround(screen.offset);
-                if (GetWindowThreadProcessId(entry.window, &owner) && owner == process && GetWindowRect(entry.window, &rect) && (rect.top == entry.parkedTop || rect.top == top || IsIconic(entry.window)))
-                {
-                    Return(entry, screen);
-                }
-            }
-
-            file.close();
-            DeleteFileW(fileName.c_str());
-        }
-        catch (const std::exception&)
-        {
-            Logger::error(L"Recovering the parked windows failed");
-        }
-    }
 };
+
+void DesktopScroll::RecoverParkedFile() noexcept
+{
+    try
+    {
+        const auto fileName = ParkedFileName();
+        std::ifstream file(fileName);
+        intptr_t handle{};
+        DWORD process{};
+        Entry entry;
+        Screen screen;
+        while (file >> handle >> process >> entry.left >> entry.canvasTop >> entry.width >> entry.height >> entry.normal.left >> entry.normal.top >> entry.normal.right >> entry.normal.bottom >> entry.maximized >> entry.maximizedTop >> entry.parkedTop >> screen.top >> screen.height >> screen.offset)
+        {
+            entry.window = reinterpret_cast<HWND>(handle);
+            RECT rect{};
+            DWORD owner{};
+            // Handles get reused: only a window of that process where the scroll left it is one of ours
+            const LONG top = entry.canvasTop - std::lround(screen.offset);
+            if (GetWindowThreadProcessId(entry.window, &owner) && owner == process && GetWindowRect(entry.window, &rect) && (rect.top == entry.parkedTop || rect.top == top || IsIconic(entry.window)))
+            {
+                Return(entry, screen);
+            }
+        }
+
+        file.close();
+        DeleteFileW(fileName.c_str());
+    }
+    catch (const std::exception&)
+    {
+        Logger::error(L"Recovering the parked windows failed");
+    }
+}
 
 bool DesktopScroll::IsParked(HWND window) noexcept
 {
@@ -1108,12 +1125,11 @@ DesktopScroll::DesktopScroll(HINSTANCE instance, PageChanged pageChanged) :
 
 DesktopScroll::~DesktopScroll()
 {
-    if (m_impl->window)
+    if (m_impl->thread.joinable())
     {
-        PostMessageW(m_impl->window, WM_SCROLL_STOP, 0, 0);
+        PostThreadMessageW(m_impl->threadId, WM_QUIT, 0, 0);
+        m_impl->thread.join();
     }
-
-    m_impl->thread.join();
 }
 
 void DesktopScroll::ReturnAll() noexcept

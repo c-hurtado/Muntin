@@ -58,6 +58,7 @@
     <ClInclude Include="DesktopScroll.h" />
     <ClInclude Include="DockMotion.h" />
     <ClInclude Include="Tray.h" />
+    <ClInclude Include="Watchdog.h" />
     <ClInclude Include="DockCaptionButtons.h" />
     <ClInclude Include="DockTree.h" />
     <ClInclude Include="FancyZonesData\DockLayouts.h" />

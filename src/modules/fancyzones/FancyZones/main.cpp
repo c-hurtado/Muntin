@@ -11,12 +11,14 @@
 #include <common/utils/resources.h>
 
 
+#include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/FancyZones.h>
 #include <FancyZonesLib/FancyZonesWinHookEventIDs.h>
 #include <FancyZonesLib/ModuleConstants.h>
 #include <FancyZonesLib/FancyZonesData/DockLayouts.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/Tray.h>
+#include <FancyZonesLib/Watchdog.h>
 
 #include <filesystem>
 #include <fstream>
@@ -33,10 +35,16 @@
 const std::wstring moduleName = L"FancyZones";
 const std::wstring internalPath = L"";
 const std::wstring instanceMutexName = L"Local\\Muntin_InstanceMutex";
+const std::wstring watchdogMutexName = L"Local\\Muntin_WatchdogMutex";
 const std::wstring stockMutexName = L"Local\\PowerToys_FancyZones_InstanceMutex"; // FancyZones of PowerToys, which can't run alongside
 
 namespace
 {
+    ULONGLONG FileTimeValue(const FILETIME& time) noexcept
+    {
+        return (static_cast<ULONGLONG>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+    }
+
     constexpr wchar_t Usage[] = L"Usage: Muntin.exe list | save <name> | load <name> | delete <name> | restart\n"
                                 L"A name has at most 100 characters and none of \\ / : * ? \" < > | %\n";
 
@@ -148,6 +156,157 @@ namespace
         return std::pair{ verb, DockCommands::IsValidName(name) ? name : std::wstring{} };
     }
 
+    // Muntin.exe --watchdog <pid> <creation time>, for the helper that Muntin starts for itself
+    std::optional<Watchdog::Parent> WatchdogParentFromCommandLine()
+    {
+        int count = 0;
+        wil::unique_hlocal_ptr<LPWSTR> args(CommandLineToArgvW(GetCommandLineW(), &count));
+        return args ? Watchdog::ParseCommandLine(count, args.get()) : std::nullopt;
+    }
+
+    // watchdog.log in the data folder: one line each time the helper can't do its job. It has no logger, which would share Muntin's log file.
+    void WatchdogNote(const wchar_t* text) noexcept
+    {
+        try
+        {
+            SYSTEMTIME now{};
+            GetLocalTime(&now);
+            wchar_t stamp[32]{};
+            swprintf_s(stamp, L"%04d-%02d-%02d %02d:%02d:%02d ", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+            std::wofstream{ PTSettingsHelper::get_module_save_folder_location(NonLocalizable::ModuleKey) + L"\\watchdog.log", std::ios::app } << stamp << text << L'\n';
+        }
+        catch (const std::exception&)
+        {
+        }
+    }
+
+    // A Muntin of another process: the one that took over, when this one ended by being stopped
+    bool OtherInstanceRuns(DWORD process)
+    {
+        DWORD other = 0;
+        const HWND window = FindWindowW(Tray::WindowClassName, nullptr);
+        return window && GetWindowThreadProcessId(window, &other) && other != process;
+    }
+
+    // The process of that id, if it was created at that time: not another that got the id since
+    wil::unique_handle OpenParent(const Watchdog::Parent& parent)
+    {
+        wil::unique_handle process(OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, parent.process));
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (!process || !GetProcessTimes(process.get(), &created, &exited, &kernel, &user) || FileTimeValue(created) != parent.created)
+        {
+            return {};
+        }
+
+        return process;
+    }
+
+    // A process of its own, so that it still works when Muntin hangs. It has no window and takes no lock of Muntin's.
+    // Ctrl+Alt+Shift+F12 ends Muntin: it is asked to quit, and ended after a few seconds if it doesn't. Then, or when Muntin
+    // ends any other way, the windows that the desktop scroll still holds go back to their places.
+    int RunWatchdog(const Watchdog::Parent& parentProcess)
+    {
+        constexpr DWORD QuitWaitMillis = 3000;
+
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        // One at a time. A restart can leave the old one a moment longer, while it puts the windows back.
+        wil::unique_handle only(CreateMutexW(nullptr, FALSE, watchdogMutexName.c_str()));
+        const DWORD owned = only ? WaitForSingleObject(only.get(), 5000) : WAIT_FAILED;
+        if (owned != WAIT_OBJECT_0 && owned != WAIT_ABANDONED)
+        {
+            WatchdogNote(L"Another watchdog still runs, or the lock failed: this one gives up");
+            return 0;
+        }
+
+        wil::unique_handle parent = OpenParent(parentProcess);
+        if (!parent)
+        {
+            return 0; // Muntin is gone already, or it isn't the process that started this
+        }
+
+        const UINT quitMessage = RegisterWindowMessageW(Tray::QuitMessageName);
+        if (!RegisterHotKey(nullptr, 1, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, VK_F12))
+        {
+            WatchdogNote(L"RegisterHotKey for Ctrl+Alt+Shift+F12 failed: another program has it. Crash recovery still works.");
+        }
+
+        for (;;)
+        {
+            const HANDLE handles[] = { parent.get() };
+            const DWORD woke = MsgWaitForMultipleObjects(1, handles, FALSE, INFINITE, QS_ALLINPUT);
+            if (woke == WAIT_FAILED)
+            {
+                WatchdogNote(L"Waiting for Muntin failed: the watchdog exits without touching any window");
+                return 0;
+            }
+
+            if (woke == WAIT_OBJECT_0)
+            {
+                break;
+            }
+
+            bool pressed = false;
+            MSG message;
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+            {
+                pressed = pressed || message.message == WM_HOTKEY;
+            }
+
+            if (pressed)
+            {
+                DWORD owner = 0;
+                const HWND window = FindWindowW(Tray::WindowClassName, nullptr);
+                if (window && GetWindowThreadProcessId(window, &owner) && owner == parentProcess.process)
+                {
+                    PostMessageW(window, quitMessage, 0, 0);
+                }
+
+                if (WaitForSingleObject(parent.get(), QuitWaitMillis) != WAIT_OBJECT_0)
+                {
+                    TerminateProcess(parent.get(), 1); // The handle was checked against the creation time
+                    WaitForSingleObject(parent.get(), 2000);
+                }
+
+                break;
+            }
+        }
+
+        if (!OtherInstanceRuns(parentProcess.process))
+        {
+            DesktopScroll::RecoverParkedFile();
+        }
+
+        return 0;
+    }
+
+    // Starts the watchdog for this process
+    void StartWatchdog() noexcept
+    {
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+        {
+            return;
+        }
+
+        wchar_t exe[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
+        std::wstring commandLine = L"\"" + std::wstring{ exe } + L"\" --watchdog " + std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(FileTimeValue(created));
+        STARTUPINFOW startup{ .cb = sizeof(STARTUPINFOW) };
+        PROCESS_INFORMATION info{};
+        // Out of the job of Muntin if it is allowed to, so that whatever ends the job leaves the watchdog to put the windows back
+        const bool started = CreateProcessW(exe, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB, nullptr, nullptr, &startup, &info) ||
+                             CreateProcessW(exe, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info);
+        if (started)
+        {
+            CloseHandle(info.hThread);
+            CloseHandle(info.hProcess);
+        }
+        else
+        {
+            Logger::warn(L"The watchdog couldn't be started: {}", get_last_error_or_default(GetLastError()));
+        }
+    }
+
     // Ends the running instance. Layouts are saved on every change, nothing is lost.
     bool EndInstance(HWND window)
     {
@@ -234,6 +393,12 @@ namespace
 
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ PWSTR lpCmdLine, _In_ int nCmdShow)
 {
+    // The watchdog uses no logger: it must not touch the log file of Muntin
+    if (const auto parent = WatchdogParentFromCommandLine())
+    {
+        return RunWatchdog(parent.value());
+    }
+
     // No telemetry: the PowerToys events and trace sessions are left out
     winrt::init_apartment();
     LoggerHelpers::init_logger(moduleName, internalPath, LogSettings::fancyZonesLoggerName);
@@ -341,6 +506,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         FancyZonesSettings::SaveValue(NonLocalizable::ShiftDragID, json::value(FancyZonesSettings::settings().shiftDrag));
     }
 
+    StartWatchdog();
     Tray::Start(hInstance, firstRun);
     run_message_loop();
     Tray::Stop();

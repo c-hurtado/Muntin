@@ -17,7 +17,6 @@
 
 namespace
 {
-    constexpr wchar_t WindowClassName[] = L"MuntinTray";
     constexpr wchar_t HelpUrl[] = L"https://github.com/c-hurtado/Muntin#readme";
     constexpr UINT IconId = 1;
     constexpr UINT WM_TRAY = WM_APP + 1;
@@ -37,6 +36,7 @@ namespace
         { NonLocalizable::DockCaptionButtonsID, L"< > buttons on docked windows", &Settings::dockCaptionButtons },
         { NonLocalizable::DockMiddleClickExpandID, L"Middle click on a title bar expands the window", &Settings::dockMiddleClickExpand },
         { NonLocalizable::DockAnimationID, L"Animations", &Settings::dockAnimation },
+        { NonLocalizable::DockAnticipationID, L"Pull back slightly before a move", &Settings::dockAnticipation },
         { NonLocalizable::DesktopScrollOverviewID, L"Zoom out while scrolling the desktop", &Settings::desktopScrollOverview },
     };
 
@@ -46,6 +46,7 @@ namespace
         const wchar_t* label;
     };
 
+    const Choice MotionChoices[] = { { 0, L"Spring" }, { 1, L"Ease" } };
     const Choice PageChoices[] = { { 1, L"1 (no scrolling)" }, { 2, L"2" }, { 3, L"3" }, { MaxDesktopScrollPages, L"4" } };
 
     // One slider each in the gap and margins dialog; settings.json allows more than the sliders reach
@@ -76,12 +77,14 @@ namespace
         LoadLayoutCommand,
         ToggleBase = 100,
         PagesBase = 300,
+        MotionBase = 400,
     };
 
     HINSTANCE s_instance{};
     HWND s_window{};
     HICON s_icon{};
     UINT s_taskbarCreated{};
+    UINT s_quitMessage{};
 
     bool AddIcon() noexcept
     {
@@ -863,10 +866,12 @@ namespace
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         for (size_t i = 0; i < std::size(Toggles); ++i)
         {
-            AppendMenuW(menu, MF_STRING | (settings.*Toggles[i].value ? MF_CHECKED : 0), static_cast<UINT_PTR>(ToggleBase) + i, Toggles[i].label);
+            const bool idle = Toggles[i].id == NonLocalizable::DockAnticipationID && !settings.dockAnimation; // Nothing moves without animations
+            AppendMenuW(menu, MF_STRING | (settings.*Toggles[i].value ? MF_CHECKED : 0) | (idle ? MF_GRAYED : 0), static_cast<UINT_PTR>(ToggleBase) + i, Toggles[i].label);
         }
 
         AppendMenuW(menu, MF_STRING, SpacingCommand, L"Gap and margins...");
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(MotionChoices, std::size(MotionChoices), settings.dockMotionCurve, MotionBase)), L"Motion curve");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(PageChoices, std::size(PageChoices), settings.desktopScrollPages, PagesBase)), L"Desktop pages per monitor");
 
         AppendMenuW(menu, MF_STRING, SaveLayoutCommand, L"Save layout...");
@@ -892,6 +897,10 @@ namespace
         else if (command == SpacingCommand)
         {
             saved = EditSpacing();
+        }
+        else if (command >= MotionBase && command - MotionBase < std::size(MotionChoices))
+        {
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::DockMotionCurveID, json::value(MotionChoices[command - MotionBase].value));
         }
         else if (command >= PagesBase && command - PagesBase < std::size(PageChoices))
         {
@@ -953,6 +962,13 @@ namespace
             return 0;
         }
 
+        // From the watchdog, which asks for a clean exit before it ends the process
+        if (message == s_quitMessage && s_quitMessage != 0)
+        {
+            PostQuitMessage(0);
+            return 0;
+        }
+
         // Explorer started again: the icon is gone with the old taskbar
         if (message == s_taskbarCreated && s_taskbarCreated != 0)
         {
@@ -968,6 +984,7 @@ void Tray::Start(HINSTANCE instance, bool welcome) noexcept
 {
     s_instance = instance;
     s_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    s_quitMessage = RegisterWindowMessageW(QuitMessageName);
 
     WNDCLASSEXW wcex{ .cbSize = sizeof(WNDCLASSEXW), .lpfnWndProc = WndProc, .hInstance = instance, .lpszClassName = WindowClassName };
     RegisterClassExW(&wcex);
@@ -977,6 +994,7 @@ void Tray::Start(HINSTANCE instance, bool welcome) noexcept
 
     // Run as administrator, the window would otherwise not hear from Explorer
     ChangeWindowMessageFilterEx(s_window, s_taskbarCreated, MSGFLT_ALLOW, nullptr);
+    ChangeWindowMessageFilterEx(s_window, s_quitMessage, MSGFLT_ALLOW, nullptr);
     const int size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem());
     s_icon = static_cast<HICON>(LoadImageW(instance, L"IDI_ICON1", IMAGE_ICON, size, size, 0));
     if (!s_window || !AddIcon())

@@ -4,6 +4,7 @@
 #include "FancyZonesLib\DockTree.h"
 #include "FancyZonesLib\FancyZonesData\DockLayouts.h"
 #include "FancyZonesLib\Settings.h"
+#include "FancyZonesLib\Watchdog.h"
 
 #include <filesystem>
 #include <fstream>
@@ -139,6 +140,68 @@ namespace FancyZonesUnitTests
 
             Assert::AreEqual(0.0, displacement, 0.5);
             Assert::AreEqual(0.0, velocity, 5.0);
+        }
+
+        TEST_METHOD (DockMotionEaseGoesStraightThereWithoutOvershoot)
+        {
+            Assert::AreEqual(0.0, DockMotion::Ease(0, false), 1e-9);
+            Assert::AreEqual(0.5, DockMotion::Ease(0.5, false), 1e-9);
+            Assert::AreEqual(1.0, DockMotion::Ease(1, false), 1e-9);
+            Assert::AreEqual(1.0, DockMotion::Ease(2, false), 1e-9);
+            double before = 0;
+            for (int step = 1; step <= 100; ++step)
+            {
+                const double share = DockMotion::Ease(step / 100.0, false);
+                Assert::IsTrue(share >= before && share <= 1.0);
+                before = share;
+            }
+        }
+
+        TEST_METHOD (DockMotionAnticipationPullsBackThenArrives)
+        {
+            double lowest = 0;
+            for (int step = 0; step <= 100; ++step)
+            {
+                const double share = DockMotion::Ease(step / 100.0, true);
+                lowest = (std::min)(lowest, share);
+                Assert::IsTrue(share <= 1.0);
+            }
+
+            Assert::IsTrue(lowest < -0.01 && lowest > -0.1);
+            Assert::AreEqual(0.0, DockMotion::Ease(0, true), 1e-9);
+            Assert::AreEqual(1.0, DockMotion::Ease(1, true), 1e-9);
+        }
+
+        TEST_METHOD (EaseKeepsGoingOnSmallShiftsOfItsGoal)
+        {
+            const std::array<double, 4> goal{ 100, 100, 500, 400 };
+            Assert::IsFalse(DockMotion::RestartsEase(goal, { 101, 100, 502, 400 }, 0.5)); // A rounding: the end moves
+            Assert::IsTrue(DockMotion::RestartsEase(goal, { 100, 100, 700, 400 }, 0.5)); // A new place: from where it is
+            Assert::IsTrue(DockMotion::RestartsEase(goal, { 101, 100, 502, 400 }, 1.0)); // Arrived: the shift still has to be made
+        }
+
+        TEST_METHOD (WatchdogCommandLine)
+        {
+            const wchar_t* good[] = { L"Muntin.exe", L"--watchdog", L"1234", L"133000000000000000" };
+            const auto parent = Watchdog::ParseCommandLine(4, good);
+            Assert::IsTrue(parent.has_value());
+            Assert::AreEqual(1234ul, parent->process);
+            Assert::AreEqual(133000000000000000ull, parent->created);
+
+            const wchar_t* zero[] = { L"Muntin.exe", L"--watchdog", L"0", L"1" };
+            const wchar_t* text[] = { L"Muntin.exe", L"--watchdog", L"12x", L"1" };
+            const wchar_t* negative[] = { L"Muntin.exe", L"--watchdog", L"-5", L"1" };
+            const wchar_t* big[] = { L"Muntin.exe", L"--watchdog", L"4294967296", L"1" };
+            const wchar_t* noTime[] = { L"Muntin.exe", L"--watchdog", L"1234" };
+            const wchar_t* extra[] = { L"Muntin.exe", L"--watchdog", L"1234", L"1", L"more" };
+            const wchar_t* other[] = { L"Muntin.exe", L"list", L"1234", L"1" };
+            Assert::IsFalse(Watchdog::ParseCommandLine(4, zero).has_value());
+            Assert::IsFalse(Watchdog::ParseCommandLine(4, text).has_value());
+            Assert::IsFalse(Watchdog::ParseCommandLine(4, negative).has_value());
+            Assert::IsFalse(Watchdog::ParseCommandLine(4, big).has_value());
+            Assert::IsFalse(Watchdog::ParseCommandLine(3, noTime).has_value());
+            Assert::IsFalse(Watchdog::ParseCommandLine(5, extra).has_value());
+            Assert::IsFalse(Watchdog::ParseCommandLine(4, other).has_value());
         }
 
         TEST_METHOD (DesktopScrollSixNotchesAreAScreen)

@@ -30,6 +30,10 @@ public:
     // The window that the last page change carried, if any, once
     HWND TakeLandedWindow() noexcept;
 
+    // Brings back the windows that a run which didn't end cleanly left parked, as desktop-scroll.txt says, and deletes the file.
+    // Needs no instance: the watchdog process calls it too.
+    static void RecoverParkedFile() noexcept;
+
     // The scroll holds the window: nothing else may move it
     static bool IsParked(HWND window) noexcept;
 

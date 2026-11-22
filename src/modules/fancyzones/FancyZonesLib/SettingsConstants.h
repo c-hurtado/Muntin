@@ -90,6 +90,8 @@ namespace NonLocalizable
     const wchar_t DesktopScrollOverviewID[] = L"fancyzones_desktopScrollOverview";
     const wchar_t DesktopScrollPagesID[] = L"fancyzones_desktopScrollPages";
     const wchar_t DockAnimationID[] = L"fancyzones_dockAnimation";
+    const wchar_t DockMotionCurveID[] = L"fancyzones_dockMotionCurve";
+    const wchar_t DockAnticipationID[] = L"fancyzones_dockAnticipation";
     const wchar_t DockMiddleClickExpandID[] = L"fancyzones_dockMiddleClickExpand";
     const wchar_t DockEdgeSnapID[] = L"fancyzones_dockEdgeSnap";
     const wchar_t DockEdgeSnapBandID[] = L"fancyzones_dockEdgeSnapBand";

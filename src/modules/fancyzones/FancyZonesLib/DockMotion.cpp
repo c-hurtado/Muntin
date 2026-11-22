@@ -14,6 +14,7 @@
 #include <common/logger/logger.h>
 
 #include <FancyZonesLib/DesktopScroll.h>
+#include <FancyZonesLib/Settings.h>
 
 namespace
 {
@@ -35,6 +36,12 @@ namespace
     constexpr double RestSpeed = 5.0; // Pixels per second
     constexpr double LongestStep = 1.0 / 30;
 
+    constexpr double PullBack = 0.06; // Ease: the pull back is this share of the way at its deepest, but the ease already goes on, so the dip is about 2%
+    constexpr double PullBackEnd = 0.3; // Of the ease, where the pull back is over
+    constexpr double PullBackSeconds = 0.08; // Spring: how long the pull back lasts before it sets off
+    constexpr double SpringPullBack = 0.04; // Of the way, at the deepest...
+    constexpr double SpringPullBackMost = 40.0; // ...and at most this many pixels
+
     struct Sprite
     {
         HWND window{};
@@ -42,6 +49,11 @@ namespace
         std::array<double, 4> place{}; // Left, top, right, bottom
         std::array<double, 4> speed{};
         RECT drawn{}; // DWM is only told what changed
+        bool started{};
+        std::array<double, 4> from{}; // Ease: where the move set off from, to where it is going
+        std::array<double, 4> goal{};
+        double elapsed{}; // Seconds since
+        bool pullBack{};
     };
 
     bool IsAnimated(HWND window) noexcept
@@ -68,6 +80,30 @@ namespace
         std::erase_if(all, [&](HWND window) { return std::find(windows.begin(), windows.end(), window) == windows.end(); });
         return all;
     }
+}
+
+double DockMotion::Ease(double progress, bool anticipation) noexcept
+{
+    progress = std::clamp(progress, 0.0, 1.0);
+    double share = (1.0 - std::cos(std::numbers::pi * progress)) / 2;
+    if (anticipation && progress < PullBackEnd)
+    {
+        const double pull = std::sin(std::numbers::pi * progress / PullBackEnd);
+        share -= PullBack * pull * pull;
+    }
+
+    return share;
+}
+
+bool DockMotion::RestartsEase(const std::array<double, 4>& goal, const std::array<double, 4>& target, double progress) noexcept
+{
+    double most = 0;
+    for (size_t side = 0; side < goal.size(); ++side)
+    {
+        most = (std::max)(most, std::abs(target.at(side) - goal.at(side)));
+    }
+
+    return progress >= 1.0 || most > EaseRestartPixels;
 }
 
 void DockMotion::Advance(double& displacement, double& velocity, double seconds) noexcept
@@ -211,6 +247,66 @@ struct DockMotion::Impl
         }
 
         const auto target = PlaceOf(rect);
+        const bool ease = FancyZonesSettings::settings().dockMotionCurve == 1;
+        if (!sprite.started)
+        {
+            sprite.started = true;
+            sprite.pullBack = FancyZonesSettings::settings().dockAnticipation;
+            sprite.from = sprite.place;
+            sprite.goal = target;
+            sprite.elapsed = 0;
+        }
+        else if (ease && target != sprite.goal)
+        {
+            // A far new target starts a new ease from where the sprite is; a small shift of the same one just moves its end
+            if (RestartsEase(sprite.goal, target, sprite.elapsed / EaseSeconds))
+            {
+                sprite.pullBack = false;
+                sprite.from = sprite.place;
+                sprite.elapsed = 0;
+            }
+
+            sprite.goal = target;
+        }
+
+        if (ease)
+        {
+            sprite.elapsed += seconds;
+            const double progress = (std::min)(sprite.elapsed / EaseSeconds, 1.0);
+            const double share = Ease(progress, sprite.pullBack);
+            for (size_t side = 0; side < target.size(); ++side)
+            {
+                sprite.place.at(side) = sprite.from.at(side) + (sprite.goal.at(side) - sprite.from.at(side)) * share;
+            }
+
+            return progress < 1.0 && sprite.from != sprite.goal;
+        }
+
+        if (sprite.pullBack)
+        {
+            // Before a spring sets off: out from the target and back, the same share of the way on every side, so the size holds
+            sprite.elapsed += seconds;
+            if (sprite.elapsed < PullBackSeconds)
+            {
+                double most = 0;
+                for (size_t side = 0; side < target.size(); ++side)
+                {
+                    most = (std::max)(most, std::abs(sprite.from.at(side) - sprite.goal.at(side)));
+                }
+
+                const double share = most > 0 ? (std::min)(SpringPullBack, SpringPullBackMost / most) * std::sin(std::numbers::pi * sprite.elapsed / PullBackSeconds) : 0.0;
+                for (size_t side = 0; side < target.size(); ++side)
+                {
+                    sprite.place.at(side) = sprite.from.at(side) + (sprite.from.at(side) - sprite.goal.at(side)) * share;
+                }
+
+                return true;
+            }
+
+            sprite.pullBack = false;
+            sprite.place = sprite.from;
+        }
+
         bool resting = true;
         for (size_t side = 0; side < target.size(); ++side)
         {

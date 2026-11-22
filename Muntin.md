@@ -14,6 +14,8 @@ Muntin is a fork of PowerToys FancyZones. It docks windows by drag instead of sn
 
 Keep **FancyZones turned off in PowerToys**. While FancyZones of PowerToys runs, Muntin refuses to start, because both would move the same windows. PowerToys can still start its FancyZones after Muntin is running, so turn it off there.
 
+**Emergency exit:** Ctrl+Alt+Shift+F12 ends Muntin even when it is hung. Muntin starts a small helper of its own (a second `Muntin.exe --watchdog` process, no window, no tray icon) that listens for the keys. It asks Muntin to quit, ends it after 3 seconds if it is still there, and puts back every window that the desktop scroll was holding. It ends only the process it was started for (it checks the start time, so a process that got the same id later is safe). When it can't do its job (another program has the hotkey, or another watchdog still runs) it writes one line to `watchdog.log` in the data folder. The helper does the same when Muntin ends in any other way (a crash, or being stopped) and leaves windows parked, and it exits once Muntin has ended cleanly. **When you replace `Muntin.exe`, wait for every Muntin process to end first, the helper included** (`Get-Process Muntin`): it runs from the same file and locks it for a moment after Muntin quits.
+
 The Muntin icon sits in the notification area. Windows may put it in the overflow menu at first; to keep it visible, drag it onto the taskbar, or turn it on under **Settings > Personalization > Taskbar > Other system tray icons**.
 
 ## Use it
@@ -171,6 +173,8 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
 | `fancyzones_dockAutoTile` | New windows dock by themselves (see "Dock new windows by themselves") | `false` |
 | `fancyzones_dockAnimation` | Windows moved with Shift+Win+arrows or the < > buttons spring to their new places | `true` |
+| `fancyzones_dockMotionCurve` | How moved windows travel (Shift+Win+arrows, the < > buttons, and going to a desktop page): `0` spring, which overshoots slightly and keeps the speed of a move in flight, or `1` ease, one 0.3 second curve without overshoot, which a new target restarts from where the window is. Also in the tray menu, under "Motion curve". | 0 |
+| `fancyzones_dockAnticipation` | Windows pull back slightly before they move. Moves to a desktop page pull back only with the ease curve. Nothing moves without `fancyzones_dockAnimation`, so the tray item is grayed out then. | `false` |
 | `fancyzones_dockMiddleClickExpand` | A middle click on a title bar expands its window into the open space | `true` |
 | `fancyzones_desktopScrollOverview` | Scrolling the desktop zooms out to the pages (see "Scroll the desktop") | `false` |
 | `fancyzones_desktopScrollPages` | How many pages each monitor scrolls through, the first included, empty pages too: 1 to 4. 1 turns scrolling off, and Shift+Win+Down doesn't take a window past the last page. | 2 |
