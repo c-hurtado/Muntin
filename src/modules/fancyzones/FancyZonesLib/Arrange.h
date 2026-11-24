@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -12,10 +14,24 @@
 // where Muntin would move a window: may it? (Phase 2: Stage itself is not there yet, only the hands-off protocol.)
 namespace Stage
 {
-    // Phase 3 puts the windows of the stage here. Nothing is held yet.
-    inline bool IsHeld(HWND) noexcept
+    // The windows the stage manages, kept by StageMode (main thread) and read from any thread (DockMotion): a lock guards the set.
+    // Header-only on purpose: the unit tests need no StageMode to test the hands-off rules.
+    namespace Registry
     {
-        return false;
+        inline std::mutex lock;
+        inline std::set<HWND> held;
+    }
+
+    inline void SetHeld(std::set<HWND> windows)
+    {
+        std::lock_guard guard(Registry::lock);
+        Registry::held = std::move(windows);
+    }
+
+    inline bool IsHeld(HWND window) noexcept
+    {
+        std::lock_guard guard(Registry::lock);
+        return Registry::held.contains(window);
     }
 }
 

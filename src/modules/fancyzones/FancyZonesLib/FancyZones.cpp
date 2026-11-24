@@ -37,6 +37,7 @@
 #include <FancyZonesLib/on_thread_executor.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/SettingsObserver.h>
+#include <FancyZonesLib/StageMode.h>
 #include <FancyZonesLib/trace.h>
 #include <FancyZonesLib/util.h>
 #include <FancyZonesLib/VirtualDesktop.h>
@@ -217,6 +218,11 @@ namespace
 
     constexpr UINT_PTR DockSaveTimerId = 0x444B5356;
     constexpr UINT DockSaveDelayMillis = 1000;
+
+    // Stage mode: the timer of its runtime, and the one that starts it a moment after the desktop scroll has returned its windows
+    constexpr UINT_PTR StageTimerId = 0x53544731;
+    constexpr UINT_PTR StageEnterTimerId = 0x53544732;
+    constexpr UINT StageEnterDelayMillis = 700;
 
     // wparam of WM_PRIV_SNAP_HOTKEY; lparam is the key for the first two and the pixels for the last two
     constexpr WPARAM DockKeyMove = 0;
@@ -573,6 +579,7 @@ private:
     std::map<std::wstring, ULONGLONG> m_dockLaunched; // Apps started by a named layout, and when
     std::unique_ptr<DockCaptionButtons::Overlays> m_captionButtons;
     std::unique_ptr<DesktopScroll> m_desktopScroll;
+    std::unique_ptr<StageMode> m_stageMode;
     std::unique_ptr<DockMotion> m_dockMotion;
     HWND m_dockCarried{}; // Docked, on its way to another page, where it docks on the same side
     Dock::Edge m_dockCarriedSide{};
@@ -642,6 +649,16 @@ FancyZones::Run() noexcept
     });
     SyncCaptionButtonsTimer();
 
+    m_stageMode = std::make_unique<StageMode>(m_window, StageTimerId);
+    if (Arrange::IsStage())
+    {
+        SetTimer(m_window, StageEnterTimerId, StageEnterDelayMillis, nullptr); // Started in stage mode
+    }
+    else
+    {
+        StageMode::RecoverStateFile(); // A run that was stopped in stage mode left its windows moved: back they go
+    }
+
     m_dockMotion = std::make_unique<DockMotion>(m_hinstance);
     m_desktopScroll = std::make_unique<DesktopScroll>(m_hinstance, [window = m_window](HMONITOR monitor, int page) {
         PostMessageW(window, WM_PRIV_DESKTOP_SCROLL, reinterpret_cast<WPARAM>(monitor), page);
@@ -699,6 +716,7 @@ FancyZones::Destroy() noexcept
     }
 
     MiddleClick::Unhook();
+    m_stageMode.reset(); // Puts every stage window back, and deletes the state file
     m_dockMotion.reset();
     m_desktopScroll.reset();
     DockLayouts::instance().SwitchPagesHome();
@@ -1324,10 +1342,19 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         {
             auto hwnd = reinterpret_cast<HWND>(wparam);
             WindowCreated(hwnd);
+            if (m_stageMode && Arrange::IsStage())
+            {
+                m_stageMode->WindowAppeared(hwnd);
+            }
         }
         else if (message == WM_PRIV_WINDOWDESTROYED)
         {
             auto hwnd = reinterpret_cast<HWND>(wparam);
+            if (m_stageMode)
+            {
+                m_stageMode->WindowDestroyed(hwnd);
+            }
+
             // If the destroyed window was being dragged, abort the drag without
             // snapping. Calling MoveSizeEnd() here would snap the now-destroyed
             // HWND into a zone and corrupt the layout state.
@@ -1358,6 +1385,10 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         {
             const auto hwnd = reinterpret_cast<HWND>(wparam);
             DockVisibility(hwnd, lparam != 0);
+            if (m_stageMode && Arrange::IsStage())
+            {
+                m_stageMode->WindowVisibility(hwnd, lparam != 0);
+            }
 
             // A window that was minimized when the slot kept for its app came up takes it once it is restored
             if (lparam == 0 && !DockLayouts::IsHidden(hwnd))
@@ -1474,6 +1505,21 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 m_dockNewWindows.emplace_back(created, GetTickCount64() + DockNewWindowWaitMillis);
             }
         }
+        else if (message == WM_TIMER && wparam == StageTimerId)
+        {
+            if (m_stageMode)
+            {
+                m_stageMode->OnTimer();
+            }
+        }
+        else if (message == WM_TIMER && wparam == StageEnterTimerId)
+        {
+            KillTimer(m_window, StageEnterTimerId);
+            if (m_stageMode && Arrange::IsStage())
+            {
+                m_stageMode->Enter();
+            }
+        }
         else if (message == WM_TIMER && wparam == DockNewWindowTimerId)
         {
             DockNewWindows();
@@ -1513,6 +1559,11 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             FancyZonesSettings::instance().LoadSettings();
 
             SyncCaptionButtonsTimer();
+
+            if (m_stageMode)
+            {
+                m_stageMode->SettingsChanged(); // Gap, margins, layout, cut, rows
+            }
 
             // The gap between docked windows may have changed
             for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
@@ -1563,6 +1614,11 @@ void FancyZones::OnKeyboardInput(WPARAM /*flags*/, HRAWINPUT hInput) noexcept
 void FancyZones::OnDisplayChange(DisplayChangeType changeType) noexcept
 {
     Logger::info(L"Display changed, type: {}", DisplayChangeTypeName(changeType));
+
+    if (m_stageMode)
+    {
+        m_stageMode->DisplayChanged();
+    }
 
     bool updateWindowsPositions = false;
 
@@ -2013,6 +2069,17 @@ void FancyZones::SettingsUpdate(SettingId id)
             if (m_desktopScroll)
             {
                 m_desktopScroll->ReturnAll();
+            }
+
+            // The scroll brings its windows back on its own thread: stage mode takes the windows once they are there
+            SetTimer(m_window, StageEnterTimerId, StageEnterDelayMillis, nullptr);
+        }
+        else
+        {
+            KillTimer(m_window, StageEnterTimerId);
+            if (m_stageMode)
+            {
+                m_stageMode->Leave(); // Every window goes back where it was
             }
         }
 

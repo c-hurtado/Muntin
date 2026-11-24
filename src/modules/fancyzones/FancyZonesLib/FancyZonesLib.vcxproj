@@ -56,6 +56,12 @@
     <ClInclude Include="KeyboardInput.h" />
     <ClInclude Include="KeyState.h" />
     <ClInclude Include="Arrange.h" />
+    <ClInclude Include="StageAdopt.h" />
+    <ClInclude Include="StageConfig.h" />
+    <ClInclude Include="StageLayouts.h" />
+    <ClInclude Include="StageMode.h" />
+    <ClInclude Include="StagePark.h" />
+    <ClInclude Include="StageState.h" />
     <ClInclude Include="DesktopScroll.h" />
     <ClInclude Include="DockMotion.h" />
     <ClInclude Include="Tray.h" />
@@ -121,6 +127,7 @@
     <ClCompile Include="FancyZonesData.cpp" />
     <ClCompile Include="JsonHelpers.cpp" />
     <ClCompile Include="DesktopScroll.cpp" />
+    <ClCompile Include="StageMode.cpp" />
     <ClCompile Include="DockMotion.cpp" />
     <ClCompile Include="Tray.cpp" />
     <ClCompile Include="DockCaptionButtons.cpp" />

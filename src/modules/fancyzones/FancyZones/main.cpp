@@ -18,6 +18,7 @@
 #include <FancyZonesLib/FancyZonesData/DockLayouts.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/Tray.h>
+#include <FancyZonesLib/StageMode.h>
 #include <FancyZonesLib/Watchdog.h>
 
 #include <filesystem>
@@ -203,7 +204,7 @@ namespace
 
     // A process of its own, so that it still works when Muntin hangs. It has no window and takes no lock of Muntin's.
     // Ctrl+Alt+Shift+F12 ends Muntin: it is asked to quit, and ended after a few seconds if it doesn't. Then, or when Muntin
-    // ends any other way, the windows that the desktop scroll still holds go back to their places.
+    // ends any other way, the windows that the desktop scroll or stage mode still hold go back to their places.
     int RunWatchdog(const Watchdog::Parent& parentProcess)
     {
         constexpr DWORD QuitWaitMillis = 3000;
@@ -274,6 +275,7 @@ namespace
         if (!OtherInstanceRuns(parentProcess.process))
         {
             DesktopScroll::RecoverParkedFile();
+            StageMode::RecoverStateFile([&] { return OtherInstanceRuns(parentProcess.process); }); // Stage mode: every window it moved goes back to where stage-state.txt says
         }
 
         return 0;
