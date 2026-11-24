@@ -33,6 +33,9 @@
     <ClCompile Include="DockCaptionButtons.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Arrange.Spec.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="DockTree.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

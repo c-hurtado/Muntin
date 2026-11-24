@@ -8,6 +8,7 @@
 #include <common/utils/winapi_error.h>
 #include <common/SettingsAPI/FileWatcher.h>
 
+#include <FancyZonesLib/Arrange.h>
 #include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/DockMotion.h>
 #include <FancyZonesLib/DockCaptionButtons.h>
@@ -385,7 +386,7 @@ struct FancyZones : public winrt::implements<FancyZones, IFancyZones, IFancyZone
 {
 public:
     FancyZones(HINSTANCE hinstance, std::function<void()> disableModuleCallbackFunction) noexcept :
-        SettingsObserver({ SettingId::EditorHotkey, SettingId::WindowSwitching, SettingId::PrevTabHotkey, SettingId::NextTabHotkey, SettingId::SpanZonesAcrossMonitors, SettingId::MonitorRotation, SettingId::MonitorRotationHotkey }),
+        SettingsObserver({ SettingId::EditorHotkey, SettingId::WindowSwitching, SettingId::PrevTabHotkey, SettingId::NextTabHotkey, SettingId::SpanZonesAcrossMonitors, SettingId::MonitorRotation, SettingId::MonitorRotationHotkey, SettingId::ArrangeMode }),
         m_hinstance(hinstance),
         m_draggingState([this]() {
             PostMessageW(m_window, WM_PRIV_LOCATIONCHANGE, NULL, NULL);
@@ -984,7 +985,8 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
     }
 
     // Shift+Win+arrows move the foreground window in the dock layout
-    if (win && shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
+    const bool dockKeys = !Arrange::IsStage(); // Stage mode freezes the dock trees: the dock keys keep their Windows meaning
+    if (dockKeys && win && shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
     {
         if (info->vkCode == VK_LEFT || info->vkCode == VK_RIGHT || info->vkCode == VK_UP || info->vkCode == VK_DOWN)
         {
@@ -997,7 +999,7 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
     }
 
     // Win+arrows move the focus from a docked window to the docked window on that side
-    if (win && !shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
+    if (dockKeys && win && !shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
     {
         if ((info->vkCode == VK_LEFT || info->vkCode == VK_RIGHT || info->vkCode == VK_UP || info->vkCode == VK_DOWN) && IsDocked(GetForegroundWindow()))
         {
@@ -1008,7 +1010,7 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
 
     // Win+J turns the split of a docked window. Win+minus and Win+plus resize it: its width, with Shift its height; by a little with Alt,
     // by a lot with Ctrl. They repeat while held, and on any other window the keys keep their Windows meaning.
-    if (win && FancyZonesSettings::settings().overrideSnapHotkeys && !m_windowMouseSnapper)
+    if (dockKeys && win && FancyZonesSettings::settings().overrideSnapHotkeys && !m_windowMouseSnapper)
     {
         const bool grow = info->vkCode == VK_OEM_PLUS || info->vkCode == VK_ADD;
         const bool shrink = info->vkCode == VK_OEM_MINUS || info->vkCode == VK_SUBTRACT;
@@ -1031,7 +1033,7 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
         }
     }
 
-    if (win && ctrl && alt)
+    if (dockKeys && win && ctrl && alt)
     {
         const int digit = DigitFromVkCode(info->vkCode);
         // Win+Ctrl+Alt+Shift+digit saves the dock layout, Win+Ctrl+Alt+digit recalls it.
@@ -1282,7 +1284,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             OnDisplayChange(DisplayChangeType::Initialization);
             MiddleClick::Hook(m_window);
         }
-        else if (message == WM_PRIV_DOCK_EXPAND && FancyZonesSettings::settings().dockMiddleClickExpand)
+        else if (message == WM_PRIV_DOCK_EXPAND && !Arrange::IsStage() && FancyZonesSettings::settings().dockMiddleClickExpand)
         {
             const POINT pt{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
             DockExpand(GetAncestor(WindowFromPoint(pt), GA_ROOT), pt);
@@ -1300,7 +1302,8 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_MOVESIZESTART)
         {
             auto hwnd = reinterpret_cast<HWND>(wparam);
-            if (auto monitor = MonitorFromPoint(ptScreen, MONITOR_DEFAULTTONULL))
+            // Stage mode: the drag is not dock-by-drag's (the stage handles it from Phase 5 on)
+            if (auto monitor = Arrange::IsStage() ? nullptr : MonitorFromPoint(ptScreen, MONITOR_DEFAULTTONULL))
             {
                 MoveSizeStart(hwnd, monitor);
                 MoveSizeUpdate(monitor, ptScreen);
@@ -1461,7 +1464,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_DOCK_NEW_WINDOW)
         {
             const auto created = reinterpret_cast<HWND>(wparam);
-            if (FancyZonesSettings::settings().dockAutoTile && GetAncestor(created, GA_ROOT) == created)
+            if (!Arrange::IsStage() && FancyZonesSettings::settings().dockAutoTile && GetAncestor(created, GA_ROOT) == created)
             {
                 if (m_dockNewWindows.empty())
                 {
@@ -1999,6 +2002,23 @@ void FancyZones::SettingsUpdate(SettingId id)
         }
     }
     break;
+    case SettingId::ArrangeMode:
+    {
+        // Entering Stage mode brings back what the desktop scroll parked; a drag in flight isn't the new mode's
+        if (Arrange::IsStage())
+        {
+            AbortMoveSize();
+            m_dockNewWindows.clear();
+            KillTimer(m_window, DockNewWindowTimerId);
+            if (m_desktopScroll)
+            {
+                m_desktopScroll->ReturnAll();
+            }
+        }
+
+        UpdateCaptionButtons();
+    }
+    break;
     case SettingId::SpanZonesAcrossMonitors:
     {
         // See UpdateWorkAreas() - same WindowMouseSnap dangling-WorkArea*
@@ -2137,7 +2157,7 @@ void FancyZones::FlashZones() noexcept
 void FancyZones::DockClaim(HWND window) noexcept
 {
     // Events come for every child window and control too. A window on another scroll page isn't free to take a slot.
-    if (GetAncestor(window, GA_ROOT) != window || DesktopScroll::IsParked(window))
+    if (Arrange::IsStage() || GetAncestor(window, GA_ROOT) != window || Arrange::HandsOff(window))
     {
         return;
     }
@@ -2228,7 +2248,7 @@ void FancyZones::DockExpand(HWND window, POINT click) noexcept
         if (other != window && IsWindowVisible(other) && FancyZonesWindowUtils::HasStyle(GetWindowLong(other, GWL_STYLE), WS_THICKFRAME) &&
             !FancyZonesWindowUtils::HasStyle(GetWindowLong(other, GWL_EXSTYLE), WS_EX_TOPMOST) &&
             GetWindow(other, GW_OWNER) != window && GetWindow(window, GW_OWNER) != other &&
-            m_workAreaConfiguration.GetWorkAreaFromWindow(other) == target && !DesktopScroll::IsParked(other) && !IsDocked(other) &&
+            m_workAreaConfiguration.GetWorkAreaFromWindow(other) == target && !Arrange::HandsOff(other) && !IsDocked(other) &&
             !cloaked(other) && CanDockMove(other))
         {
             partner = other;
@@ -2290,6 +2310,13 @@ void FancyZones::DockKey(WPARAM kind, LONG pixels) noexcept
 
 void FancyZones::DockNewWindows() noexcept
 {
+    if (Arrange::IsStage())
+    {
+        m_dockNewWindows.clear();
+        KillTimer(m_window, DockNewWindowTimerId);
+        return;
+    }
+
     const auto now = GetTickCount64();
     std::erase_if(m_dockNewWindows, [&](const std::pair<HWND, ULONGLONG>& item) {
         const auto window = item.first;
@@ -2368,7 +2395,7 @@ void FancyZones::UpdateCaptionButtons() noexcept
     }
 
     std::vector<HWND> windows;
-    if (FancyZonesSettings::settings().dockCaptionButtons && !FancyZonesSettings::settings().spanZonesAcrossMonitors)
+    if (!Arrange::IsStage() && FancyZonesSettings::settings().dockCaptionButtons && !FancyZonesSettings::settings().spanZonesAcrossMonitors)
     {
         for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
         {
@@ -2405,7 +2432,7 @@ void FancyZones::DockMoveWindow(HWND window, Dock::Edge edge) noexcept
 
     bool moved = false;
     const bool sideways = edge == Dock::Edge::Left || edge == Dock::Edge::Right;
-    if (FancyZonesSettings::settings().dockAnimation && m_dockMotion && (sideways || IsDocked(window)))
+    if (!Arrange::IsStage() && FancyZonesSettings::settings().dockAnimation && m_dockMotion && (sideways || IsDocked(window)))
     {
         std::vector<HWND> windows{ window };
         for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
@@ -2637,6 +2664,16 @@ namespace
 bool FancyZones::DockCommand(const std::wstring& verb, const std::wstring& name) noexcept
 {
     auto& layouts = DockLayouts::instance();
+    if (Arrange::IsStage() && verb != L"delete")
+    {
+        if (const auto workArea = m_workAreaConfiguration.GetWorkAreaFromCursor())
+        {
+            workArea->ShowLayoutNameLabel(L"Layouts are off in Stage mode");
+        }
+
+        return false;
+    }
+
     if (FancyZonesSettings::settings().spanZonesAcrossMonitors && verb != L"delete")
     {
         if (const auto workArea = m_workAreaConfiguration.GetWorkAreaFromCursor())

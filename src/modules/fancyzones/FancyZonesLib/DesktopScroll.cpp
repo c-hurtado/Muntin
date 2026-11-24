@@ -19,6 +19,7 @@
 #include <common/logger/logger.h>
 #include <common/utils/elevation.h>
 
+#include <FancyZonesLib/Arrange.h>
 #include <FancyZonesLib/DockMotion.h>
 #include <FancyZonesLib/ModuleConstants.h>
 #include <FancyZonesLib/Settings.h>
@@ -311,7 +312,7 @@ struct DesktopScroll::Impl
         if (code == HC_ACTION && self)
         {
             const auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lparam);
-            if (wparam == WM_MOUSEWHEEL && (IsDown(VK_LWIN) || IsDown(VK_RWIN)) && IsDown(VK_SHIFT) && !IsDown(VK_CONTROL) && !IsDown(VK_MENU) && !IsDown(VK_LBUTTON))
+            if (wparam == WM_MOUSEWHEEL && !Arrange::IsStage() && (IsDown(VK_LWIN) || IsDown(VK_RWIN)) && IsDown(VK_SHIFT) && !IsDown(VK_CONTROL) && !IsDown(VK_MENU) && !IsDown(VK_LBUTTON))
             {
                 PostMessageW(self->window, WM_SCROLL_WHEEL, static_cast<WPARAM>(static_cast<short>(HIWORD(info->mouseData))), MAKELPARAM(info->pt.x, info->pt.y));
                 return 1;

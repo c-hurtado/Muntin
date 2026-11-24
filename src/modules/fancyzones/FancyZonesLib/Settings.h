@@ -76,6 +76,11 @@ struct Settings
     int desktopScrollPages = 2; // Pages each monitor scrolls through, the first included, at most MaxDesktopScrollPages. 1: no scrolling.
     bool dockEdgeSnap = true; // A window dragged to the left or right edge docks there without Shift, like Windows snap
     int dockEdgeSnapBand = 12; // Pixels from that edge within which it docks
+    int arrangeMode = 0; // 0: dock-by-drag (default), 1: stage (see Arrange.h)
+    std::wstring stageLayout = L"stage"; // stage, pair or master
+    int stagePairCut = 500; // Where the pair layout's vertical edge sits, in thousandths of its span
+    int stageMasterCut = 600; // The same for the master layout
+    std::wstring stageRows = L""; // Master layout: height shares of the stack, in thousandths, comma separated. Empty: equal heights.
     int dockGap = 8; // Pixels left between docked windows
     int dockMarginLeft = 0; // Pixels kept free between docked windows and each work area edge
     int dockMarginTop = 0;

@@ -45,6 +45,7 @@
     <ClCompile Include="CustomLayoutsTests.Spec.cpp" />
     <ClCompile Include="DefaultLayoutsTests.Spec.cpp" />
     <ClCompile Include="DockCaptionButtons.Spec.cpp" />
+    <ClCompile Include="Arrange.Spec.cpp" />
     <ClCompile Include="DockTree.Spec.cpp" />
     <ClCompile Include="StageLayouts.Spec.cpp" />
     <ClCompile Include="FancyZonesSettings.Spec.cpp" />

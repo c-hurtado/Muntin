@@ -13,6 +13,7 @@
 
 #include <common/logger/logger.h>
 
+#include <FancyZonesLib/Arrange.h>
 #include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/Settings.h>
 
@@ -60,7 +61,7 @@ namespace
     {
         int cloaked{};
         DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
-        return IsWindowVisible(window) && !IsIconic(window) && !cloaked && !DesktopScroll::IsParked(window);
+        return IsWindowVisible(window) && !IsIconic(window) && !cloaked && !Arrange::HandsOff(window);
     }
 
     std::array<double, 4> PlaceOf(const RECT& rect) noexcept

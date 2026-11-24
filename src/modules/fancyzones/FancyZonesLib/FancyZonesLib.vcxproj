@@ -55,6 +55,7 @@
     <ClInclude Include="JsonHelpers.h" />
     <ClInclude Include="KeyboardInput.h" />
     <ClInclude Include="KeyState.h" />
+    <ClInclude Include="Arrange.h" />
     <ClInclude Include="DesktopScroll.h" />
     <ClInclude Include="DockMotion.h" />
     <ClInclude Include="Tray.h" />

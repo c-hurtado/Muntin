@@ -74,6 +74,7 @@ namespace
         Quit,
         SaveLayoutCommand,
         SpacingCommand,
+        ArrangeCommand,
         LoadLayoutCommand,
         ToggleBase = 100,
         PagesBase = 300,
@@ -870,6 +871,7 @@ namespace
             AppendMenuW(menu, MF_STRING | (settings.*Toggles[i].value ? MF_CHECKED : 0) | (idle ? MF_GRAYED : 0), static_cast<UINT_PTR>(ToggleBase) + i, Toggles[i].label);
         }
 
+        AppendMenuW(menu, MF_STRING | (settings.arrangeMode == 1 ? MF_CHECKED : 0), ArrangeCommand, L"Arrange: Dock / Stage");
         AppendMenuW(menu, MF_STRING, SpacingCommand, L"Gap and margins...");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(MotionChoices, std::size(MotionChoices), settings.dockMotionCurve, MotionBase)), L"Motion curve");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(PageChoices, std::size(PageChoices), settings.desktopScrollPages, PagesBase)), L"Desktop pages per monitor");
@@ -893,6 +895,10 @@ namespace
         if (command == LoadLayoutCommand)
         {
             PickLayout();
+        }
+        else if (command == ArrangeCommand)
+        {
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::ArrangeModeID, json::value(settings.arrangeMode == 1 ? 0 : 1));
         }
         else if (command == SpacingCommand)
         {

@@ -10,6 +10,7 @@
 #include "FancyZonesData/AppliedLayouts.h"
 #include "FancyZonesData/AppZoneHistory.h"
 #include "FancyZonesData/CustomLayouts.h"
+#include "Arrange.h"
 #include "DesktopScroll.h"
 #include "FancyZonesData/DockLayouts.h"
 #include "ZonesOverlay.h"
@@ -657,6 +658,12 @@ void WorkArea::DockRecall(Dock::Tree tree)
 
 void WorkArea::ApplyDockLayout()
 {
+    // Stage mode freezes the dock trees: they keep their windows and places for when the mode is switched back
+    if (Arrange::IsStage())
+    {
+        return;
+    }
+
     // The work areas are recreated a moment after a virtual desktop switch: until then this one is not on screen
     if (VirtualDesktop::instance().GetCurrentVirtualDesktopIdFromRegistry() != m_uniqueId.virtualDesktopId)
     {
@@ -672,7 +679,7 @@ void WorkArea::ApplyDockLayout()
     for (const auto leaf : tree.Leaves())
     {
         const bool settled = leaf->placedAt != 0 && now - leaf->placedAt > PlacementSettleMillis;
-        if (!leaf->window || leaf->hidden || !settled || DesktopScroll::IsParked(leaf->window))
+        if (!leaf->window || leaf->hidden || !settled || Arrange::HandsOff(leaf->window))
         {
             continue;
         }
@@ -699,7 +706,7 @@ void WorkArea::ApplyDockLayout()
         }
 
         // Moving a maximized window would restore it. A place squeezed to nothing by the gaps is no place.
-        if (FancyZonesWindowUtils::IsWindowMaximized(window) || rect.right <= rect.left || rect.bottom <= rect.top || DesktopScroll::IsParked(window))
+        if (FancyZonesWindowUtils::IsWindowMaximized(window) || rect.right <= rect.left || rect.bottom <= rect.top || Arrange::HandsOff(window))
         {
             continue;
         }

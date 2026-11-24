@@ -192,6 +192,39 @@ void FancyZonesSettings::LoadSettings()
             m_settings.dockEdgeSnapBand = std::clamp(*val, 1, 100);
         }
 
+        if (auto val = values.get_int_value(NonLocalizable::ArrangeModeID))
+        {
+            const int mode = std::clamp(*val, 0, 1);
+            if (m_settings.arrangeMode != mode)
+            {
+                m_settings.arrangeMode = mode;
+                NotifyObservers(SettingId::ArrangeMode);
+            }
+        }
+
+        if (auto val = values.get_string_value(NonLocalizable::StageLayoutID))
+        {
+            if (*val == L"stage" || *val == L"pair" || *val == L"master")
+            {
+                m_settings.stageLayout = *val;
+            }
+        }
+
+        if (auto val = values.get_int_value(NonLocalizable::StagePairCutID))
+        {
+            m_settings.stagePairCut = std::clamp(*val, 150, 850);
+        }
+
+        if (auto val = values.get_int_value(NonLocalizable::StageMasterCutID))
+        {
+            m_settings.stageMasterCut = std::clamp(*val, 150, 850);
+        }
+
+        if (auto val = values.get_string_value(NonLocalizable::StageRowsID))
+        {
+            m_settings.stageRows = *val;
+        }
+
         if (auto val = values.get_int_value(NonLocalizable::DockGapID))
         {
             m_settings.dockGap = std::clamp(*val, 0, 100);

@@ -44,6 +44,7 @@ enum class SettingId
     ExcludedApps,
     AllowSnapChildWindows,
     DisableRoundCornersOnSnapping,
+    ArrangeMode,
 };
 
 // The names of the settings in settings.json
@@ -95,6 +96,11 @@ namespace NonLocalizable
     const wchar_t DockMiddleClickExpandID[] = L"fancyzones_dockMiddleClickExpand";
     const wchar_t DockEdgeSnapID[] = L"fancyzones_dockEdgeSnap";
     const wchar_t DockEdgeSnapBandID[] = L"fancyzones_dockEdgeSnapBand";
+    const wchar_t ArrangeModeID[] = L"fancyzones_arrangeMode";
+    const wchar_t StageLayoutID[] = L"fancyzones_stageLayout";
+    const wchar_t StagePairCutID[] = L"fancyzones_stagePairCut";
+    const wchar_t StageMasterCutID[] = L"fancyzones_stageMasterCut";
+    const wchar_t StageRowsID[] = L"fancyzones_stageRows";
     const wchar_t DockGapID[] = L"fancyzones_dockGap";
     const wchar_t DockMarginLeftID[] = L"fancyzones_dockMarginLeft";
     const wchar_t DockMarginTopID[] = L"fancyzones_dockMarginTop";
