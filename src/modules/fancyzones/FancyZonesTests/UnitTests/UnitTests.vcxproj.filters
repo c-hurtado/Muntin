@@ -36,6 +36,9 @@
     <ClCompile Include="DockTree.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="StageLayouts.Spec.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="FancyZonesSettings.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
