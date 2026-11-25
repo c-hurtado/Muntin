@@ -31,6 +31,8 @@ namespace
     constexpr int MaxOrphanTries = 20;
     constexpr int ScansAfterEnter = 4; // x ScanRepeatMillis: stragglers (windows still coming back, apps that were busy)
     constexpr ULONGLONG ScanRepeatMillis = 1000;
+    constexpr ULONGLONG RehomeDelayMillis = 300; // After a move: wait for it to settle
+    constexpr ULONGLONG RehomePollMillis = 1000; // Moves that raise no event are found within this
     constexpr ULONGLONG LeaveSettleMillis = 1000; // Restores are async: Enter must not capture a window that is still on its way back
     constexpr ULONGLONG ReturnWaitMillis = 3000; // How long Enter waits for the desktop scroll to return its windows
     constexpr ULONGLONG GraceMillis = 2000; // After a move of ours that is not the layout settling (display change)
@@ -962,6 +964,136 @@ void StageMode::Release(int id, bool minimized, bool restore)
     Schedule(TickMillis);
 }
 
+int StageMode::MonitorIndex(const Rect& monitorRect) const
+{
+    for (size_t i = 0; i < m_monitors.size(); i++)
+    {
+        if (m_monitors[i].rect.Same(monitorRect))
+        {
+            return static_cast<int>(i);
+        }
+    }
+
+    return -1;
+}
+
+void StageMode::WindowMoved(HWND window) noexcept
+{
+    try
+    {
+        if (!m_active || !window || !Find(window))
+        {
+            return; // Only held windows: the debounce below is not armed by every move on the desktop
+        }
+
+        ArmRehome();
+    }
+    catch (...)
+    {
+    }
+}
+
+// Arms the debounce unless one is already counting down: a stream of events must not push the scan back (or reset the timer) each time
+void StageMode::ArmRehome()
+{
+    if (!m_rehomeAt)
+    {
+        m_rehomeAt = GetTickCount64() + RehomeDelayMillis;
+        Schedule(TickMillis);
+    }
+}
+
+void StageMode::ScheduleRehome() noexcept
+{
+    try
+    {
+        if (m_active && m_stages.size() > 1)
+        {
+            ArmRehome();
+        }
+    }
+    catch (...)
+    {
+    }
+}
+
+// A held window that is on another monitor than its stage's: it joins the stage of that monitor (port of StageProto's RehomeScan).
+void StageMode::RehomeScan()
+{
+    const auto now = GetTickCount64();
+    for (auto& from : m_stages)
+    {
+        const auto ids = from.order; // Rehome changes the order
+        for (const int id : ids)
+        {
+            const auto found = m_windows.find(id);
+            if (found == m_windows.end() || std::find(from.order.begin(), from.order.end(), id) == from.order.end())
+            {
+                continue;
+            }
+
+            auto& m = found->second;
+            const bool usable = IsWindow(m.window) && IsWindowVisible(m.window) && !IsIconic(m.window) && !IsHungAppWindow(m.window);
+            MonitorStage* to = usable ? StageFor(m.window) : nullptr;
+            StageState::RehomeFacts facts;
+            facts.usable = usable;
+            facts.mouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+            facts.now = now;
+            facts.grace = m.grace;
+            facts.destinationKnown = to != nullptr;
+            facts.sameStage = to == &from;
+            facts.destinationHasRoom = to && StageConfig::HasRoom(to->order.size(), StageConfig::CapacityOf(*to->layout));
+            if (facts.usable && to && !facts.sameStage && (facts.mouseDown || now < m.grace))
+            {
+                // Held back: tried again as soon as the drag is over or the grace has run out, never dropped
+                m_rehomeAt = facts.mouseDown ? (m_rehomeAt ? m_rehomeAt : now + RehomeDelayMillis) : StageState::RearmRehome(m_rehomeAt, m.grace);
+            }
+
+            switch (StageState::DecideRehome(facts))
+            {
+            case StageState::RehomeAction::Move:
+                Rehome(id, from, *to);
+                break;
+            case StageState::RehomeAction::Unmanage:
+                Logger::info(L"Stage: rehome hwnd={:x} class={} from monitor {} to monitor {}: no room there, left where it is", reinterpret_cast<uintptr_t>(m.window), ClassOf(m.window),
+                             MonitorIndex(from.monitor.rect), MonitorIndex(to->monitor.rect));
+                Release(id, false, false);
+                break;
+            case StageState::RehomeAction::None:
+                break;
+            }
+        }
+    }
+}
+
+void StageMode::Rehome(int id, MonitorStage& from, MonitorStage& to)
+{
+    auto& m = m_windows.at(id);
+    const bool wasDocked = StageState::WasDocked(*from.layout, from.order, id);
+
+    // The saved original place follows the window (restore must not send it back), written BEFORE anything moves
+    const auto before = m.original;
+    m.original.rect = StageState::SaneRect(StageState::ShiftIntoMonitor(before.rect, from.monitor.rect, to.monitor.rect), { to.monitor.rect });
+    m.original.normal = StageState::ShiftIntoMonitor(before.normal, from.monitor.rect, to.monitor.rect);
+    if (!WriteState())
+    {
+        m.original = before; // Nothing has changed
+        return;
+    }
+
+    from.layout->Remove(from.order, id); // The first window behind takes the freed place
+    to.layout->Join(to.order, id, wasDocked); // The layout decides where: pair and master differ
+    m.minW = m.minH = 0; // The minimum size depends on the DPI of the monitor: measured again
+    m.learned = 0;
+    m.pending = {};
+    Prepare(m, to.monitor.work); // Measures; a maximized window (Aero Snap on the top edge) is restored first, and Land waits for that
+    m.grace = GetTickCount64() + GraceMillis;
+    Logger::info(L"Stage: rehome hwnd={:x} class={} from monitor {} to monitor {}: {}", reinterpret_cast<uintptr_t>(m.window), ClassOf(m.window), MonitorIndex(from.monitor.rect),
+                 MonitorIndex(to.monitor.rect), wasDocked ? L"docked there" : L"behind the docked windows there");
+    Land(from);
+    Land(to);
+}
+
 void StageMode::Scan()
 {
     for (const HWND window : TopLevelWindows())
@@ -1149,7 +1281,7 @@ void StageMode::Enter() noexcept
             LogDecision(window, L"adopted");
         }
 
-        Logger::info(L"Stage: entering with {} of {} windows on {} monitors (foreground hwnd={:x})", taken.size(), windows.size(), m_stages.size(), reinterpret_cast<uintptr_t>(foreground));
+        Logger::info(L"Stage: entering with {} of {} windows on {} monitors (foreground hwnd={:x} class={})", taken.size(), windows.size(), m_stages.size(), reinterpret_cast<uintptr_t>(foreground), foreground ? ClassOf(foreground) : std::wstring(L"none"));
 
         // BEFORE the first move: the state file lists every window and the place it has now
         if (!WriteState())
@@ -1173,6 +1305,7 @@ void StageMode::Enter() noexcept
         LandAll();
         m_scansLeft = ScansAfterEnter;
         m_scanAt = now + ScanDelayMillis;
+        m_pollAt = now + RehomePollMillis;
         Schedule(TickMillis);
     }
     catch (...)
@@ -1200,7 +1333,7 @@ void StageMode::Leave() noexcept
         }
 
         m_pending.clear();
-        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = 0;
+        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = m_rehomeAt = 0;
         m_scansLeft = 0;
 
         // Everything goes back; what can't (not responding) stays in the file
@@ -1295,11 +1428,34 @@ void StageMode::OnTimer() noexcept
             }
 
             LandAll();
+            m_rehomeAt = now + TickMillis; // Windows of a monitor that went away or came: see where each one is
         }
 
         if (!m_pending.empty())
         {
             ProcessPending();
+        }
+
+        if (m_stages.size() > 1 && now >= m_pollAt)
+        {
+            m_pollAt = now + RehomePollMillis;
+            if (!m_rehomeAt)
+            {
+                m_rehomeAt = now; // Cheap: one monitor lookup per held window
+            }
+        }
+
+        if (m_rehomeAt && now >= m_rehomeAt)
+        {
+            m_rehomeAt = 0;
+            if (GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+            {
+                m_rehomeAt = now + RehomeDelayMillis; // A drag is still going on: look again shortly
+            }
+            else
+            {
+                RehomeScan();
+            }
         }
 
         if (m_scanAt && now >= m_scanAt)
@@ -1342,7 +1498,12 @@ void StageMode::OnTimer() noexcept
             RetryOrphans();
         }
 
-        if (!m_pending.empty() || m_scanAt || m_relayoutAt || m_guardAt || m_verifyAt || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
+        if (m_active && m_stages.size() > 1 && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt)
+        {
+            Schedule(static_cast<UINT>(RehomePollMillis)); // Idle: the slow poll is all that is left
+        }
+
+        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
         {
             Schedule(TickMillis);
         }

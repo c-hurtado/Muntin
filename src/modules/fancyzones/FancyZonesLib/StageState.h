@@ -375,6 +375,70 @@ namespace StageState
         return { e.showCmd, e.flags | async, true };
     }
 
+    // Rehome (a held window was moved onto another monitor): its saved original place follows it, so the restore does not send it back.
+    // The rect moves by the difference of the monitor origins, then slides back inside the new monitor when the old one was larger.
+    inline StageLayouts::LRect ShiftIntoMonitor(const StageLayouts::LRect& r, const StageLayouts::LRect& from, const StageLayouts::LRect& to)
+    {
+        const int dx = to.L - from.L, dy = to.T - from.T;
+        const int nl = r.L + dx, nt = r.T + dy, nr = r.R + dx, nb = r.B + dy;
+        int cx = nr > to.R ? to.R - nr : 0;
+        if (nl + cx < to.L)
+        {
+            cx = to.L - nl;
+        }
+
+        int cy = nb > to.B ? to.B - nb : 0;
+        if (nt + cy < to.T)
+        {
+            cy = to.T - nt;
+        }
+
+        return StageLayouts::LRect(nl + cx, nt + cy, nr + cx, nb + cy);
+    }
+
+    // Was the window one of the docked (shown) windows of its stage? Then it joins the other stage docked too (the layout decides
+    // where: master / left slot, or behind them), else not (strip, stack end, hidden): as StageProto's Rehome.
+    inline bool WasDocked(const StageLayouts::ILayout& layout, const std::vector<int>& order, int id)
+    {
+        const auto it = std::find(order.begin(), order.end(), id);
+        return it != order.end() && static_cast<int>(it - order.begin()) < layout.Slots(static_cast<int>(order.size()));
+    }
+
+    // A scan was held back by a grace period (or a drag): it is tried again right after, never dropped. pending: the earliest scan
+    // already due (0: none). Returns when the next scan is due.
+    inline unsigned long long RearmRehome(unsigned long long pending, unsigned long long blockedUntil)
+    {
+        const unsigned long long at = blockedUntil + 1;
+        return pending == 0 ? at : (pending < at ? pending : at);
+    }
+
+    enum class RehomeAction
+    {
+        None,
+        Move, // join the stage of the monitor it is on
+        Unmanage // that stage has no room: the window is left where the user put it
+    };
+
+    struct RehomeFacts
+    {
+        bool usable{}; // exists, visible, not minimized, responding
+        bool mouseDown{}; // a drag may be in progress
+        unsigned long long now{}, grace{}; // our own moves are still landing before grace
+        bool destinationKnown{};
+        bool sameStage{};
+        bool destinationHasRoom{};
+    };
+
+    inline RehomeAction DecideRehome(const RehomeFacts& f)
+    {
+        if (!f.usable || f.mouseDown || f.now < f.grace || !f.destinationKnown || f.sameStage)
+        {
+            return RehomeAction::None;
+        }
+
+        return f.destinationHasRoom ? RehomeAction::Move : RehomeAction::Unmanage;
+    }
+
     // A window we asked to leave the maximized state (ShowWindowAsync SW_RESTORE): wait for it, but only until a deadline (not a
     // count of looks: the stage is laid out many times per second during a scan). A window that is still maximized at the deadline
     // is stuck: it is released as it was and never adopted again until it is no longer maximized (or gone).

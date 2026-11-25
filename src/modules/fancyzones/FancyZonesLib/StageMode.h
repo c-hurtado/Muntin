@@ -45,6 +45,8 @@ public:
     void WindowAppeared(HWND window) noexcept; // created, shown, uncloaked, restored from minimized
     void WindowVisibility(HWND window, bool minimizing) noexcept; // minimized (true); restored, hidden or cloaked (false)
     void WindowDestroyed(HWND window) noexcept;
+    void ScheduleRehome() noexcept; // something that may have moved a window happened (foreground change): a debounced look
+    void WindowMoved(HWND window) noexcept; // end of a drag, or a location change: a held window may be on another monitor now
     void DisplayChanged() noexcept;
     void SettingsChanged() noexcept; // gap, margins, layout, cut or rows changed in settings.json
 
@@ -118,6 +120,10 @@ private:
     void ProcessPending();
     void VerifyLanding();
     void RetryOrphans();
+    void RehomeScan();
+    void ArmRehome();
+    void Rehome(int id, MonitorStage& from, MonitorStage& to);
+    int MonitorIndex(const Rect& monitorRect) const;
     void Persist(const StageConfig::Values& after);
     void ApplyValues(const StageConfig::Values& values);
     void Schedule(UINT millis);
@@ -138,6 +144,8 @@ private:
     std::vector<StageState::Entry> m_orphans; // restore failed (hung app): they stay in the state file
     std::map<HWND, int> m_pending; // windows to look at once they are ready, with the attempts left
     ULONGLONG m_scanAt{};
+    ULONGLONG m_rehomeAt{};
+    ULONGLONG m_pollAt{}; // low frequency rehome scan: moves that raise no event (Win+Shift+Arrow, an app moving its own window)
     int m_scansLeft{};
     ULONGLONG m_enterAt{}; // Enter is waiting (a Leave's restores, the scroll's return)
     ULONGLONG m_enterSince{};

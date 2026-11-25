@@ -556,6 +556,82 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(StageAdopt::IsEligible(stuck));
         }
 
+        TEST_METHOD (RehomeShiftsTheSavedPlaceAndSlidesItInside)
+        {
+            const LRect a(0, 0, 2560, 1440), b(2560, 0, 6400, 2160);
+            // Same relative place on the other monitor
+            Assert::IsTrue(StageState::ShiftIntoMonitor(LRect(100, 100, 900, 700), a, b).Same(LRect(2660, 100, 3460, 700)));
+            // Back again
+            Assert::IsTrue(StageState::ShiftIntoMonitor(LRect(2660, 100, 3460, 700), b, a).Same(LRect(100, 100, 900, 700)));
+            // A window that reached the right edge of the larger monitor slides back inside the smaller one
+            const auto slid = StageState::ShiftIntoMonitor(LRect(2760, 200, 5160, 1400), b, a);
+            Assert::IsTrue(slid.Inside(a), L"inside the smaller monitor");
+            Assert::AreEqual(2560, slid.R, L"slid left until it fits");
+            Assert::AreEqual(2400, slid.W(), L"its size is not touched");
+            // Hanging out at the top left stays within too
+            Assert::IsTrue(StageState::ShiftIntoMonitor(LRect(2500, -8, 3300, 700), b, a).T >= 0);
+        }
+
+        TEST_METHOD (RehomeJoinPlaceAndDecision)
+        {
+            // Docked or not on the old stage (master with a stack cap of 4: 5 docked), then the layout of the new stage places it
+            auto master = StageLayouts::MakeMaster();
+            const std::vector<int> seven = { 1, 2, 3, 4, 5, 6, 7 };
+            Assert::IsTrue(StageState::WasDocked(*master, seven, 1), L"master");
+            Assert::IsTrue(StageState::WasDocked(*master, seven, 5));
+            Assert::IsFalse(StageState::WasDocked(*master, seven, 6), L"hidden by the stack cap");
+            Assert::IsFalse(StageState::WasDocked(*master, seven, 99), L"not there");
+            auto pair = StageLayouts::MakePair();
+            Assert::IsTrue(StageState::WasDocked(*pair, { 1, 2, 3, 4 }, 2));
+            Assert::IsFalse(StageState::WasDocked(*pair, { 1, 2, 3, 4 }, 3), L"strip");
+
+            std::vector<int> order = { 10, 11, 12 };
+            master->Join(order, 20, true);
+            Assert::AreEqual(20, order.front(), L"master layout: a docked window arriving takes master");
+            order = { 10, 11, 12 };
+            master->Join(order, 20, false);
+            Assert::AreEqual(20, order[1], L"master layout: otherwise the front of the stack");
+            order = { 10, 11, 12 };
+            pair->Join(order, 20, true);
+            Assert::AreEqual(20, order.front(), L"pair layout: docked takes the left slot");
+            order = { 10, 11, 12 };
+            pair->Join(order, 20, false);
+            Assert::AreEqual(20, order[2], L"pair layout: not docked goes to the strip, behind the two docked");
+
+            // A scan held back by grace or a drag is armed again, at the earliest of what is due
+            Assert::AreEqual(7001ULL, StageState::RearmRehome(0, 7000));
+            Assert::AreEqual(5000ULL, StageState::RearmRehome(5000, 7000), L"an earlier scan stays");
+            Assert::AreEqual(7001ULL, StageState::RearmRehome(9000, 7000), L"a later one is brought forward");
+
+            StageState::RehomeFacts f;
+            f.usable = true;
+            f.now = 5000;
+            f.grace = 1000;
+            f.destinationKnown = true;
+            f.destinationHasRoom = true;
+            using StageState::RehomeAction;
+            Assert::IsTrue(StageState::DecideRehome(f) == RehomeAction::Move);
+
+            auto g = f;
+            g.sameStage = true;
+            Assert::IsTrue(StageState::DecideRehome(g) == RehomeAction::None, L"still on its own monitor");
+            g = f;
+            g.mouseDown = true;
+            Assert::IsTrue(StageState::DecideRehome(g) == RehomeAction::None, L"a drag is going on");
+            g = f;
+            g.grace = 6000;
+            Assert::IsTrue(StageState::DecideRehome(g) == RehomeAction::None, L"our own move is still landing");
+            g = f;
+            g.usable = false;
+            Assert::IsTrue(StageState::DecideRehome(g) == RehomeAction::None, L"minimized, hidden or hung");
+            g = f;
+            g.destinationKnown = false;
+            Assert::IsTrue(StageState::DecideRehome(g) == RehomeAction::None, L"on no monitor with a stage");
+            g = f;
+            g.destinationHasRoom = false;
+            Assert::IsTrue(StageState::DecideRehome(g) == RehomeAction::Unmanage, L"no room: left where the user put it");
+        }
+
         TEST_METHOD (SizesAreScaledFromTheAppsDpiToThePhysicalMonitor)
         {
             Assert::AreEqual(300LL, StageDpi::ScaleBetween(200, 144, 96), L"an unaware app on a 150% monitor");

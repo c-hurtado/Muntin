@@ -1330,6 +1330,10 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_MOVESIZEEND)
         {
             MoveSizeEnd();
+            if (m_stageMode && Arrange::IsStage())
+            {
+                m_stageMode->WindowMoved(reinterpret_cast<HWND>(wparam)); // May have been dropped on the other monitor
+            }
         }
         else if (message == WM_PRIV_LOCATIONCHANGE)
         {
@@ -1490,6 +1494,11 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         }
         else if (message == WM_PRIV_CAPTION_BUTTONS_REFRESH || (message == WM_TIMER && wparam == CaptionButtonsTimerId))
         {
+            if (message == WM_PRIV_CAPTION_BUTTONS_REFRESH && m_stageMode && Arrange::IsStage())
+            {
+                m_stageMode->ScheduleRehome(); // Posted on a foreground change: a window may have been moved to the other monitor
+            }
+
             UpdateCaptionButtons();
         }
         else if (message == WM_PRIV_DOCK_NEW_WINDOW)
@@ -1515,6 +1524,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_TIMER && wparam == StageEnterTimerId)
         {
             KillTimer(m_window, StageEnterTimerId);
+            Logger::info(L"Stage: enter timer fired, stage mode is {}", Arrange::IsStage() ? L"on" : L"off");
             if (m_stageMode && Arrange::IsStage())
             {
                 m_stageMode->Enter();
@@ -2061,6 +2071,7 @@ void FancyZones::SettingsUpdate(SettingId id)
     case SettingId::ArrangeMode:
     {
         // Entering Stage mode brings back what the desktop scroll parked; a drag in flight isn't the new mode's
+        Logger::info(L"Stage: arrange mode is now {}", Arrange::IsStage() ? L"stage" : L"dock");
         if (Arrange::IsStage())
         {
             AbortMoveSize();
