@@ -323,7 +323,7 @@ namespace StageStripPlan
     }
 
     // The strip of a plan: one tile per StripTile item (in plan order), `fit` of them completely inside the usable area; the others are
-    // reached by scrolling (StageStripMotion::Project picks what shows). No strip in the plan (or no tile that fits): nothing to show.
+    // reached by scrolling (StageStripMotion::ProjectSlide picks what shows). No strip in the plan (or no tile that fits): nothing to show.
     inline std::optional<Strip> Build(const std::wstring& key, const StageLayouts::Plan& plan, const std::function<Source(int)>& sourceOf)
     {
         if (!plan.HasStrip)

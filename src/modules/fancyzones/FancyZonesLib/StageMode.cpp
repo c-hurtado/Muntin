@@ -1605,7 +1605,8 @@ void StageMode::WindowMoved(HWND window) noexcept
         // A window that changed its shape (a parked one that resized itself, or one that was unmaximized): its strip tile has another
         // height now. Debounced; only when the aspect moved by more than 5%. Our own moves come through here too and end the same way.
         RECT rect{};
-        if (!m_drag && held->parked && held->tileAspect > 0 && IsWindow(window) && !IsIconic(window) && GetWindowRect(window, &rect))
+        // Armed during a drag too: OnTimer keeps it pending until the drag ends, so it fires after DragEnd.
+        if (held->parked && held->tileAspect > 0 && IsWindow(window) && !IsIconic(window) && GetWindowRect(window, &rect))
         {
             const int w = rect.right - rect.left - held->insets.L - held->insets.R;
             const int h = rect.bottom - rect.top - held->insets.T - held->insets.B;
@@ -2466,9 +2467,13 @@ void StageMode::OnTimer() noexcept
 
         if (m_replanAt && now >= m_replanAt)
         {
-            m_replanAt = 0;
-            if (!m_drag)
+            if (m_drag)
             {
+                m_replanAt = now + ReplanDelayMillis; // a drag is active: stay pending and fire after it ends
+            }
+            else
+            {
+                m_replanAt = 0;
                 LandAll(); // the tile heights follow the windows' shapes (a plan that did not change moves nothing)
             }
         }
