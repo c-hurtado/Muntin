@@ -9,6 +9,7 @@
 #include <FancyZonesLib/Arrange.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/StageAdopt.h>
+#include <FancyZonesLib/StageDpi.h>
 #include <FancyZonesLib/StageConfig.h>
 #include <FancyZonesLib/StageLayouts.h>
 #include <FancyZonesLib/StagePark.h>
@@ -494,6 +495,97 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(async | toMaximized, p.flags);
             p = StageState::PlacementFor(normal, false, true);
             Assert::IsFalse(p.usePlacement, L"hidden and normal: only the rect goes back");
+        }
+
+        TEST_METHOD (RestoreRectFromACoordinateMixUpIsBroughtDownToAMonitor)
+        {
+            // Monitor 0: 2560x1440 at 0 (100%), monitor 1: 3840x2160 at x=2560 (150%)
+            const std::vector<LRect> monitors = { LRect(0, 0, 2560, 1440), LRect(2560, 0, 6400, 2160) };
+
+            // What was really saved: wider than any monitor
+            const auto sane = StageState::SaneRect(LRect(2561, 10, 8318, 2190), monitors);
+            Assert::AreEqual(3840, sane.W(), L"as wide as the monitor it was mostly on");
+            Assert::IsTrue(sane.Inside(LRect(2560, 0, 6400, 2160)));
+            Assert::IsTrue(sane.W() <= 3840 && sane.H() <= 2160);
+
+            // Real windows stay exactly as they are, maximized ones with their invisible frame too
+            const LRect normal(100, 100, 1500, 900), maximized(-8, -8, 2568, 1448), spanning(2000, 100, 3200, 900);
+            Assert::IsTrue(StageState::SaneRect(normal, monitors).Same(normal));
+            Assert::IsTrue(StageState::SaneRect(maximized, monitors).Same(maximized));
+            Assert::IsTrue(StageState::SaneRect(spanning, monitors).Same(spanning), L"across two monitors is fine");
+            Assert::IsTrue(StageState::SaneRect(LRect(0, 0, 99999, 50), {}).W() == 99999, L"no monitors known: unchanged");
+
+            const auto tall = StageState::SaneRect(LRect(-500, -500, 600, 9000), monitors);
+            Assert::IsTrue(tall.H() <= 1440 && tall.Inside(LRect(0, 0, 2560, 1440)));
+
+            auto entry = MakeEntry(1, 2, L"Chrome_WidgetWin_1");
+            entry.rect = LRect(2561, 10, 8318, 2190);
+            entry.normal = LRect(2561, 10, 8318, 2190);
+            const auto clean = StageState::Sanitized(entry, monitors);
+            Assert::IsTrue(clean.rect.Inside(LRect(2560, 0, 6400, 2160)) && clean.normal.Inside(LRect(2560, 0, 6400, 2160)));
+            Assert::AreEqual(entry.pid, clean.pid);
+            Assert::AreEqual(entry.cls, clean.cls);
+        }
+
+        TEST_METHOD (MaximizedWindowOnTheLargestMonitorIsNotClamped)
+        {
+            const std::vector<LRect> monitors = { LRect(0, 0, 2560, 1440), LRect(2560, 0, 6400, 2160) };
+            const LRect maximized(2552, -8, 6408, 2168); // the largest monitor with its invisible frame
+            Assert::IsTrue(StageState::SaneRect(maximized, monitors).Same(maximized));
+            const LRect borderless(2560, 0, 6400, 2160);
+            Assert::IsTrue(StageState::SaneRect(borderless, monitors).Same(borderless));
+        }
+
+        TEST_METHOD (UnmaximizeUsesADeadlineAndStuckWindowsStaySkipped)
+        {
+            using StageState::Unmaximize;
+            Assert::IsTrue(StageState::UnmaximizeDecision(true, false, 100, 3100) == Unmaximize::Done, L"it restored");
+            Assert::IsTrue(StageState::UnmaximizeDecision(false, true, 100, 0) == Unmaximize::UserMaximized, L"the user's: left alone");
+            Assert::IsTrue(StageState::UnmaximizeDecision(true, true, 100, 3100) == Unmaximize::Wait);
+            Assert::IsTrue(StageState::UnmaximizeDecision(true, true, 3099, 3100) == Unmaximize::Wait, L"every Land before the deadline just waits, however many there are");
+            Assert::IsTrue(StageState::UnmaximizeDecision(true, true, 3100, 3100) == Unmaximize::GiveUp);
+            Assert::IsTrue(StageState::UnmaximizeDecision(true, true, 99999, 3100) == Unmaximize::GiveUp);
+
+            Assert::IsTrue(StageState::StillStuck(true, true));
+            Assert::IsFalse(StageState::StillStuck(true, false), L"restored by itself: eligible again");
+            Assert::IsFalse(StageState::StillStuck(false, true));
+
+            auto stuck = Plain();
+            stuck.stuckMaximized = true;
+            Assert::AreEqual(std::wstring(L"stuck maximized (it would not restore)"), std::wstring(StageAdopt::SkipReason(stuck)));
+            Assert::IsFalse(StageAdopt::IsEligible(stuck));
+        }
+
+        TEST_METHOD (SizesAreScaledFromTheAppsDpiToThePhysicalMonitor)
+        {
+            Assert::AreEqual(300LL, StageDpi::ScaleBetween(200, 144, 96), L"an unaware app on a 150% monitor");
+            Assert::AreEqual(200LL, StageDpi::ScaleBetween(200, 144, 144), L"per-monitor aware: already physical");
+            Assert::AreEqual(200LL, StageDpi::ScaleBetween(200, 0, 96), L"unknown dpi: unchanged");
+            Assert::AreEqual(200LL, StageDpi::ScaleBetween(200, 144, 0));
+            Assert::AreEqual(0LL, StageDpi::ScaleBetween(0, 192, 96));
+            Assert::AreEqual(1LL << 41, StageDpi::ScaleBetween(1LL << 40, 192, 96), L"no overflow in 64 bit");
+        }
+
+        TEST_METHOD (EverySkipHasAReadableReason)
+        {
+            Assert::IsNull(StageAdopt::SkipReason(Plain()));
+
+            const auto reason = [](auto change) {
+                auto i = Plain();
+                change(i);
+                const auto* text = StageAdopt::SkipReason(i);
+                Assert::IsNotNull(text);
+                return std::wstring(text);
+            };
+            Assert::AreEqual(std::wstring(L"minimized"), reason([](auto& i) { i.iconic = true; }));
+            Assert::AreEqual(std::wstring(L"cloaked"), reason([](auto& i) { i.cloaked = true; }));
+            Assert::AreEqual(std::wstring(L"owned window (a dialog)"), reason([](auto& i) { i.hasOwner = true; }));
+            Assert::AreEqual(std::wstring(L"looks parked already (under 4 px on screen)"), reason([](auto& i) { i.onScreenPx = 0; }));
+            Assert::AreEqual(std::wstring(L"held by the desktop scroll or StageProto"), reason([](auto& i) { i.heldElsewhere = true; }));
+            Assert::AreEqual(std::wstring(L"not resizable (no thick frame)"), reason([](auto& i) { i.style = WS_POPUP; }));
+            Assert::AreEqual(std::wstring(L"shell or system class"), reason([](auto& i) { i.cls = L"Progman"; }));
+            Assert::AreEqual(std::wstring(L"topmost"), reason([](auto& i) { i.exStyle = WS_EX_TOPMOST; }));
+            Assert::AreEqual(std::wstring(L"no title"), reason([](auto& i) { i.emptyTitle = true; }));
         }
     };
 }

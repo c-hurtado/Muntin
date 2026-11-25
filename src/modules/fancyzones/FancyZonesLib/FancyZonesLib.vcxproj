@@ -58,6 +58,7 @@
     <ClInclude Include="Arrange.h" />
     <ClInclude Include="StageAdopt.h" />
     <ClInclude Include="StageConfig.h" />
+    <ClInclude Include="StageDpi.h" />
     <ClInclude Include="StageLayouts.h" />
     <ClInclude Include="StageMode.h" />
     <ClInclude Include="StagePark.h" />

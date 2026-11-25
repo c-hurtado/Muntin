@@ -37,6 +37,9 @@ public:
     // The scroll holds the window: nothing else may move it
     static bool IsParked(HWND window) noexcept;
 
+    // The scroll holds some window (a return is still on its way)
+    static bool AnyParked() noexcept;
+
     // A layout only works on a whole page: docking between two pages scrolls to the nearest one, which
     // puts the layout in force. window: the window that docked, if any, which goes along to that page.
     static void RestOnPage(HMONITOR monitor, HWND window) noexcept;

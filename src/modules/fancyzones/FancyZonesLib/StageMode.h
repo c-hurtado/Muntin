@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -72,7 +73,7 @@ private:
         int learned{}; // how often a minimum was learned from how the window landed
         bool parked{}; // sits where Park put it
         bool needMeasure{}; // was maximized: insets and minimum size are taken once it is restored
-        int unmaximizeTries{};
+        ULONGLONG unmaximizeUntil{}; // deadline for it to leave the maximized state
         ULONGLONG grace{}; // no learning from its size before this tick
         StageState::Pending pending; // a size seen once, not yet believed
         bool guarded{}; // a modal dialog hangs off it: it is not parked until the dialog closes
@@ -110,6 +111,8 @@ private:
     void Land(MonitorStage& stage);
     void LandAll();
     bool Adopt(HWND window);
+    const wchar_t* Consider(HWND window, MonitorStage*& stage, std::optional<StageState::Entry>& original);
+    void LogDecision(HWND window, const wchar_t* verdict);
     void Release(int id, bool minimized, bool restore);
     void Scan();
     void ProcessPending();
@@ -135,6 +138,12 @@ private:
     std::vector<StageState::Entry> m_orphans; // restore failed (hung app): they stay in the state file
     std::map<HWND, int> m_pending; // windows to look at once they are ready, with the attempts left
     ULONGLONG m_scanAt{};
+    int m_scansLeft{};
+    ULONGLONG m_enterAt{}; // Enter is waiting (a Leave's restores, the scroll's return)
+    ULONGLONG m_enterSince{};
+    ULONGLONG m_enterNotBefore{};
+    std::set<HWND> m_stuck; // would not leave the maximized state: skipped until they do
+    std::map<HWND, std::wstring> m_logged; // last verdict logged per window
     ULONGLONG m_relayoutAt{};
     ULONGLONG m_verifyAt{};
     ULONGLONG m_orphanAt{};

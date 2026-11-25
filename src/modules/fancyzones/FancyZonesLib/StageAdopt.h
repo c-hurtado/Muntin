@@ -47,44 +47,63 @@ namespace StageAdopt
         int onScreenPx{ 800 }; // StageState::OnScreenPx: under 4 looks parked already
         bool monitorKnown{ true }; // the window is on a monitor with a stage
         bool elevatedBlocked{}; // the window's process is elevated and Muntin is not: it cannot be moved
+        bool stuckMaximized{}; // we asked it to restore and it would not: not taken again until it is not maximized
         bool heldElsewhere{}; // parked by the desktop scroll, or arranged by StageProto (Muntin.HandsOff)
     };
 
     constexpr int MinAdoptWidth = 100;
     constexpr int MinAdoptHeight = 60;
 
+    // Why the stage does not take the window; nullptr: it is eligible. The text goes to the log, so a window that is ignored says why.
+    inline const wchar_t* SkipReason(const AdoptInfo& w)
+    {
+        if (!w.isWindow)
+            return L"not a window";
+        if (!w.topLevel)
+            return L"not top level";
+        if (!w.visible)
+            return L"not visible";
+        if (w.iconic)
+            return L"minimized";
+        if (w.hasOwner)
+            return L"owned window (a dialog)";
+        if (w.hung)
+            return L"not responding";
+        if ((w.exStyle & WS_EX_TOOLWINDOW) != 0)
+            return L"tool window";
+        if ((w.exStyle & WS_EX_NOACTIVATE) != 0)
+            return L"no-activate window";
+        if ((w.exStyle & WS_EX_TOPMOST) != 0)
+            return L"topmost";
+        if ((w.style & WS_THICKFRAME) == 0)
+            return L"not resizable (no thick frame)";
+        if (w.cloaked)
+            return L"cloaked";
+        if (w.ownProcess)
+            return L"Muntin's own window";
+        if (w.emptyTitle)
+            return L"no title";
+        if (IsSkippedClass(w.cls))
+            return L"shell or system class";
+        if (!w.monitorKnown)
+            return L"no monitor with a stage";
+        if (w.width < MinAdoptWidth || w.height < MinAdoptHeight)
+            return L"too small";
+        if (w.stuckMaximized)
+            return L"stuck maximized (it would not restore)";
+        if (w.heldElsewhere)
+            return L"held by the desktop scroll or StageProto";
+        if (w.onScreenPx < 4)
+            return L"looks parked already (under 4 px on screen)";
+        if (w.elevatedBlocked)
+            return L"elevated process";
+        return nullptr;
+    }
+
     // Eligible: a plain, visible, resizable top-level window of another process that Muntin may move
     inline bool IsEligible(const AdoptInfo& w)
     {
-        constexpr LONG_PTR skippedEx = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST;
-
-        if (!w.isWindow || !w.topLevel || !w.visible || w.iconic || w.hasOwner || w.hung)
-        {
-            return false;
-        }
-
-        if ((w.exStyle & skippedEx) != 0 || (w.style & WS_THICKFRAME) == 0) // tool window, no-activate, topmost, not resizable
-        {
-            return false;
-        }
-
-        if (w.cloaked || w.ownProcess || w.emptyTitle || IsSkippedClass(w.cls) || !w.monitorKnown)
-        {
-            return false;
-        }
-
-        if (w.width < MinAdoptWidth || w.height < MinAdoptHeight)
-        {
-            return false;
-        }
-
-        // A window that is parked already (by an earlier run that died, or by the scroll) must not be recorded as "the original"
-        if (w.onScreenPx < 4 || w.heldElsewhere)
-        {
-            return false;
-        }
-
-        return !w.elevatedBlocked;
+        return SkipReason(w) == nullptr;
     }
 
     // A window that may own a modal dialog

@@ -276,6 +276,51 @@ namespace StageState
         return r.R > r.L && (monitors.empty() || OnScreenPx(r, monitors) >= 4);
     }
 
+    // A saved rect wider or taller than any monitor (plus the invisible frame, 32 px) cannot be a real window: it came from a
+    // coordinate mix-up. It is brought down to the size of the monitor it overlaps most and moved onto it. Other rects stay as they are.
+    inline StageLayouts::LRect SaneRect(const StageLayouts::LRect& r, const std::vector<StageLayouts::LRect>& monitors)
+    {
+        constexpr int frame = 32;
+        if (monitors.empty())
+        {
+            return r;
+        }
+
+        int maxW = 0, maxH = 0;
+        const StageLayouts::LRect* best = &monitors.front();
+        long long bestArea = -1;
+        for (const auto& m : monitors)
+        {
+            maxW = (std::max)(maxW, m.W());
+            maxH = (std::max)(maxH, m.H());
+            const long long w = (std::max)(0, (std::min)(r.R, m.R) - (std::max)(r.L, m.L));
+            const long long h = (std::max)(0, (std::min)(r.B, m.B) - (std::max)(r.T, m.T));
+            if (w * h > bestArea)
+            {
+                bestArea = w * h;
+                best = &m;
+            }
+        }
+
+        if (r.W() <= maxW + frame && r.H() <= maxH + frame)
+        {
+            return r;
+        }
+
+        const int w = (std::min)(r.W(), best->W()), h = (std::min)(r.H(), best->H());
+        const int l = (std::max)(best->L, (std::min)(r.L, best->R - w));
+        const int t = (std::max)(best->T, (std::min)(r.T, best->B - h));
+        return StageLayouts::LRect(l, t, l + w, t + h);
+    }
+
+    // The entry as it may be restored: both rects made sane
+    inline Entry Sanitized(Entry e, const std::vector<StageLayouts::LRect>& monitors)
+    {
+        e.rect = SaneRect(e.rect, monitors);
+        e.normal = SaneRect(e.normal, monitors);
+        return e;
+    }
+
     // The sizes that apps report (WM_GETMINMAXINFO) are not trusted: a bogus huge value would overflow the layout's int
     // arithmetic (undefined behaviour). Every minimum is brought into 0 .. the size of the work area.
     inline int ClampMin(long long value, int limit)
@@ -328,6 +373,38 @@ namespace StageState
         }
 
         return { e.showCmd, e.flags | async, true };
+    }
+
+    // A window we asked to leave the maximized state (ShowWindowAsync SW_RESTORE): wait for it, but only until a deadline (not a
+    // count of looks: the stage is laid out many times per second during a scan). A window that is still maximized at the deadline
+    // is stuck: it is released as it was and never adopted again until it is no longer maximized (or gone).
+    enum class Unmaximize
+    {
+        Done, // not maximized (any more)
+        UserMaximized, // maximized, and we did not ask: left alone
+        Wait,
+        GiveUp
+    };
+
+    inline Unmaximize UnmaximizeDecision(bool weAsked, bool zoomed, unsigned long long now, unsigned long long until)
+    {
+        if (!zoomed)
+        {
+            return Unmaximize::Done;
+        }
+
+        if (!weAsked)
+        {
+            return Unmaximize::UserMaximized;
+        }
+
+        return now < until ? Unmaximize::Wait : Unmaximize::GiveUp;
+    }
+
+    // A window on the stuck list stays skipped only while it is still maximized
+    inline bool StillStuck(bool onStuckList, bool zoomed)
+    {
+        return onStuckList && zoomed;
     }
 
     // The window's own minimum size is learned from how it lands (StageProto VerifyTick): a frame more than Tolerance px bigger

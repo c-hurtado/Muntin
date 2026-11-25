@@ -15,6 +15,7 @@
 #include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/ModuleConstants.h>
 #include <FancyZonesLib/Settings.h>
+#include <FancyZonesLib/StageDpi.h>
 #include <FancyZonesLib/SettingsConstants.h>
 #include <FancyZonesLib/WindowUtils.h>
 
@@ -28,11 +29,15 @@ namespace
     constexpr ULONGLONG GuardMillis = 500; // Modal dialog check
     constexpr ULONGLONG OrphanMillis = 1500;
     constexpr int MaxOrphanTries = 20;
+    constexpr int ScansAfterEnter = 4; // x ScanRepeatMillis: stragglers (windows still coming back, apps that were busy)
+    constexpr ULONGLONG ScanRepeatMillis = 1000;
+    constexpr ULONGLONG LeaveSettleMillis = 1000; // Restores are async: Enter must not capture a window that is still on its way back
+    constexpr ULONGLONG ReturnWaitMillis = 3000; // How long Enter waits for the desktop scroll to return its windows
     constexpr ULONGLONG GraceMillis = 2000; // After a move of ours that is not the layout settling (display change)
     constexpr int PendingAttempts = 20; // x TickMillis: a new window may start hidden or untitled
     constexpr size_t MaxPending = 64;
     constexpr int MaxLearned = 3;
-    constexpr int MaxUnmaximizeTries = 12; // x TickMillis
+    constexpr ULONGLONG UnmaximizeMillis = 3000; // How long a window gets to leave the maximized state
     constexpr DWORD MinSizeTimeoutMillis = 150;
 
     using Rect = StageLayouts::LRect;
@@ -111,7 +116,9 @@ namespace
         };
     }
 
-    void MoveTo(HWND window, const Rect& outer, bool toBottom)
+    // Windows sets a size for the DPI of the window's monitor: a window moved to a monitor with another scale gets resized by the
+    // WM_DPICHANGED that the move causes. The second SetWindowPos (queued after the first, on the window's thread) sets the exact rect.
+    void MoveTo(HWND window, const Rect& outer, bool toBottom, HMONITOR target)
     {
         RECT now{};
         if (GetWindowRect(window, &now) && ToRect(now).Same(outer) && !toBottom)
@@ -119,8 +126,14 @@ namespace
             return;
         }
 
+        const bool crossing = target && MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) != target;
         // Async: a window that hangs must not hang Muntin
-        SetWindowPos(window, toBottom ? HWND_BOTTOM : nullptr, outer.L, outer.T, outer.W(), outer.H(), SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | (toBottom ? 0 : SWP_NOZORDER));
+        const UINT flags = SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | (toBottom ? 0 : SWP_NOZORDER);
+        SetWindowPos(window, toBottom ? HWND_BOTTOM : nullptr, outer.L, outer.T, outer.W(), outer.H(), flags);
+        if (crossing)
+        {
+            SetWindowPos(window, toBottom ? HWND_BOTTOM : nullptr, outer.L, outer.T, outer.W(), outer.H(), flags);
+        }
     }
 
     // Windows reuses handles and a dialog may sit on it: foreground root
@@ -177,8 +190,9 @@ StageMode::~StageMode()
 
 #pragma region restore
 
-bool StageMode::RestoreEntry(const StageState::Entry& entry, const std::vector<Rect>& monitors, bool minimized)
+bool StageMode::RestoreEntry(const StageState::Entry& saved, const std::vector<Rect>& monitors, bool minimized)
 {
+    const StageState::Entry entry = StageState::Sanitized(saved, monitors); // A rect from a coordinate mix-up is brought down to a monitor
     const HWND window = Window(entry.hwnd);
     if (!IsWindow(window))
     {
@@ -192,7 +206,14 @@ bool StageMode::RestoreEntry(const StageState::Entry& entry, const std::vector<R
 
     const bool usable = StageState::RectUsable(entry.rect, monitors);
     const auto putRect = [&] {
-        SetWindowPos(window, nullptr, entry.rect.L, entry.rect.T, entry.rect.W(), entry.rect.H(), SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        const RECT target{ entry.rect.L, entry.rect.T, entry.rect.R, entry.rect.B };
+        const bool crossing = MonitorFromRect(&target, MONITOR_DEFAULTTONEAREST) != MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        constexpr UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+        SetWindowPos(window, nullptr, entry.rect.L, entry.rect.T, entry.rect.W(), entry.rect.H(), flags);
+        if (crossing)
+        {
+            SetWindowPos(window, nullptr, entry.rect.L, entry.rect.T, entry.rect.W(), entry.rect.H(), flags); // Exact size once the DPI changed
+        }
     };
 
     // A window that its app has hidden stays hidden: only its rect goes back (a maximized one keeps "restore to maximized")
@@ -262,6 +283,7 @@ void StageMode::RecoverStateFile(const std::function<bool()>& otherInstanceRuns)
 {
     try
     {
+        StageDpi::Scope dpi;
         const auto path = StateFilePath();
         std::error_code error;
         if (!std::filesystem::exists(path, error))
@@ -476,6 +498,12 @@ StageAdopt::AdoptInfo StageMode::Describe(HWND window)
     info.monitorKnown = StageFor(window) != nullptr;
     info.elevatedBlocked = !is_process_elevated() && IsProcessOfWindowElevated(window);
     info.heldElsewhere = DesktopScroll::IsParked(window) || MarkedByOther(window);
+    info.stuckMaximized = m_stuck.contains(window);
+    if (info.stuckMaximized && !StageState::StillStuck(true, IsZoomed(window) != FALSE))
+    {
+        m_stuck.erase(window); // It restored by itself: eligible again
+        info.stuckMaximized = false;
+    }
     return info;
 }
 
@@ -548,7 +576,7 @@ void StageMode::Prepare(Managed& m, const Rect& work)
         // once it is no longer maximized (Land waits for that).
         ShowWindowAsync(m.window, SW_RESTORE);
         m.needMeasure = true;
-        m.unmaximizeTries = MaxUnmaximizeTries;
+        m.unmaximizeUntil = GetTickCount64() + UnmaximizeMillis;
         return;
     }
 
@@ -572,9 +600,21 @@ void StageMode::Measure(Managed& m, const Rect& work)
     DWORD_PTR result{};
     if (SendMessageTimeoutW(m.window, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&info), SMTO_ABORTIFHUNG | SMTO_BLOCK, MinSizeTimeoutMillis, &result))
     {
+        // The app answers in its own DPI (a DPI-unaware app: 96): physical pixels of the monitor it is on
+        UINT monitorDpi = 0, ignored = 0;
+        const HMONITOR monitor = MonitorFromWindow(m.window, MONITOR_DEFAULTTONEAREST);
+        if (!monitor || FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &monitorDpi, &ignored)))
+        {
+            monitorDpi = 0;
+        }
+
+        const UINT windowDpi = GetDpiForWindow(m.window);
+        const long long reportedW = StageDpi::ScaleBetween(info.ptMinTrackSize.x, monitorDpi, windowDpi);
+        const long long reportedH = StageDpi::ScaleBetween(info.ptMinTrackSize.y, monitorDpi, windowDpi);
+
         // From the app: never trusted, always brought into the work area before the layout sees it
-        m.minW = (std::max)(m.minW, StageState::VisibleMin(info.ptMinTrackSize.x, m.insets.L, m.insets.R, work.W()));
-        m.minH = (std::max)(m.minH, StageState::VisibleMin(info.ptMinTrackSize.y, m.insets.T, m.insets.B, work.H()));
+        m.minW = (std::max)(m.minW, StageState::VisibleMin(reportedW, m.insets.L, m.insets.R, work.W()));
+        m.minH = (std::max)(m.minH, StageState::VisibleMin(reportedH, m.insets.T, m.insets.B, work.H()));
     }
 }
 
@@ -618,6 +658,7 @@ void StageMode::Land(MonitorStage& stage)
     const auto plan = ComputePlan(stage);
     const auto monitors = MonitorRects();
     bool waiting = false;
+    std::vector<int> stuck;
     const bool anyParked = std::any_of(plan.Items.begin(), plan.Items.end(), [](const StageLayouts::PlanItem& i) { return i.Role == StageLayouts::Role::Hidden; });
     const auto dialogs = anyParked ? StageAdopt::DialogOwners(DialogCandidates()) : std::set<HWND>{};
 
@@ -639,9 +680,14 @@ void StageMode::Land(MonitorStage& stage)
         if (IsZoomed(m.window))
         {
             // Still on its way out of maximized (we asked): look again soon. A window the user maximized is left alone.
-            if (m.needMeasure && m.unmaximizeTries-- > 0)
+            const auto step = StageState::UnmaximizeDecision(m.needMeasure, true, GetTickCount64(), m.unmaximizeUntil);
+            if (step == StageState::Unmaximize::Wait)
             {
                 waiting = true;
+            }
+            else if (step == StageState::Unmaximize::GiveUp)
+            {
+                stuck.push_back(m.id); // Never came out of maximized: it goes back as it was, and is not taken again until it is not maximized
             }
 
             continue;
@@ -650,7 +696,7 @@ void StageMode::Land(MonitorStage& stage)
         if (item.Role == StageLayouts::Role::Main || item.Role == StageLayouts::Role::Docked)
         {
             m.guarded = false;
-            MoveTo(m.window, StagePark::OuterRect(item.Rect, m.insets, stage.monitor.rect, monitors), false);
+            MoveTo(m.window, StagePark::OuterRect(item.Rect, m.insets, stage.monitor.rect, monitors), false, stage.monitor.handle);
             if (m.parked)
             {
                 SetWindowPos(m.window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS); // Back from behind everything
@@ -666,8 +712,19 @@ void StageMode::Land(MonitorStage& stage)
         {
             m.guarded = false;
             const auto park = StagePark::Park(plan.Park, m.insets, stage.monitor.rect, monitors);
-            MoveTo(m.window, park.outer, !park.sliver);
+            MoveTo(m.window, park.outer, !park.sliver, stage.monitor.handle);
             m.parked = true;
+        }
+    }
+
+    for (const int id : stuck)
+    {
+        const auto found = m_windows.find(id);
+        if (found != m_windows.end())
+        {
+            m_stuck.insert(found->second.window);
+            LogDecision(found->second.window, L"released: it would not leave the maximized state");
+            Release(id, false, true);
         }
     }
 
@@ -776,22 +833,56 @@ void StageMode::VerifyLanding()
 
 #pragma region windows
 
+// Does the stage take this window? nullptr: yes (stage and original are set); else the reason it does not, which is logged once.
+const wchar_t* StageMode::Consider(HWND window, MonitorStage*& stage, std::optional<StageState::Entry>& original)
+{
+    const wchar_t* reason = StageAdopt::SkipReason(Describe(window));
+    if (!reason)
+    {
+        stage = StageFor(window);
+        original = Capture(window);
+        if (!stage || !original)
+        {
+            reason = L"its state could not be read";
+        }
+        else if (!StageConfig::HasRoom(stage->order.size(), StageConfig::CapacityOf(*stage->layout)))
+        {
+            reason = L"no room: the stage of its monitor is full"; // Left alone, not held, not parked. Scan takes it once there is room.
+        }
+    }
+
+    if (reason)
+    {
+        LogDecision(window, reason);
+    }
+
+    return reason;
+}
+
+void StageMode::LogDecision(HWND window, const wchar_t* verdict)
+{
+    auto& last = m_logged[window];
+    if (last == verdict)
+    {
+        return; // Once per decision, not once per look
+    }
+
+    last = verdict;
+    wchar_t title[256]{};
+    const int titleLength = InternalGetWindowText(window, title, ARRAYSIZE(title));
+    Logger::info(L"Stage: hwnd={:x} class={} title={} chars: {}", reinterpret_cast<uintptr_t>(window), ClassOf(window), (std::max)(titleLength, 0), verdict);
+}
+
 bool StageMode::Adopt(HWND window)
 {
-    if (Find(window) || !StageAdopt::IsEligible(Describe(window)))
+    if (Find(window))
     {
         return false;
     }
 
-    auto* stage = StageFor(window);
-    const auto original = Capture(window);
-    if (!stage || !original)
-    {
-        return false;
-    }
-
-    // Beyond what the layout shows: left alone (not held, not parked); Scan takes it once there is room
-    if (!StageConfig::HasRoom(stage->order.size(), StageConfig::CapacityOf(*stage->layout)))
+    MonitorStage* stage = nullptr;
+    std::optional<StageState::Entry> original;
+    if (Consider(window, stage, original))
     {
         return false;
     }
@@ -807,11 +898,13 @@ bool StageMode::Adopt(HWND window)
     if (!WriteState())
     {
         m_windows.erase(id);
+        LogDecision(window, L"the state file could not be written");
         return false;
     }
 
     PublishHeld();
     Prepare(m_windows.at(id), stage->monitor.work);
+    LogDecision(window, L"adopted");
 
     // A window in front takes master; one that is not (uncloaked, found later) never takes the master slot or the focus
     if (ForegroundRoot() == window || stage->order.empty())
@@ -856,6 +949,7 @@ void StageMode::Release(int id, bool minimized, bool restore)
         Schedule(TickMillis);
     }
 
+    m_logged.erase(found->second.window); // Adopted again later (restored from minimized): that is logged again
     m_windows.erase(found);
     WriteState();
     PublishHeld();
@@ -915,6 +1009,7 @@ void StageMode::WindowVisibility(HWND window, bool minimizing) noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
         if (!m_active)
         {
             return;
@@ -950,7 +1045,10 @@ void StageMode::WindowDestroyed(HWND window) noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
         m_pending.erase(window);
+        m_stuck.erase(window);
+        m_logged.erase(window); // The handle may be reused
         if (!m_active)
         {
             return;
@@ -975,13 +1073,42 @@ void StageMode::Enter() noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
+        const auto now = GetTickCount64();
+
+        // Entering again is a rescan: whatever is eligible and was missed is taken now
         if (m_active)
         {
+            Scan();
+            m_scansLeft = ScansAfterEnter;
+            m_scanAt = now + ScanRepeatMillis;
+            Schedule(TickMillis);
             return;
         }
 
+        // Not while the restores of a Leave are still on their way, nor while the desktop scroll still brings its windows back:
+        // a window captured now would be recorded at a place it is only passing through
+        if (!m_enterSince)
+        {
+            m_enterSince = now;
+        }
+
+        if (now < m_enterNotBefore || (DesktopScroll::AnyParked() && now - m_enterSince < ReturnWaitMillis))
+        {
+            m_enterAt = now + TickMillis;
+            Schedule(TickMillis);
+            return;
+        }
+
+        m_enterSince = 0;
+        m_enterAt = 0;
+        m_logged.clear();
+        m_stuck.clear();
+
         // What an earlier run that died left behind goes back first, and what can't (not responding) stays in the file
         m_orphans = RestoreEntries(StageState::Read(StateFilePath()));
+        m_orphanTries = 0;
+        m_orphanAt = GetTickCount64() + OrphanMillis; // Not stale: they were just tried
         m_values = StageConfig::FromSettings(FancyZonesSettings::settings());
         m_stages.clear();
         RefreshMonitors();
@@ -1004,16 +1131,11 @@ void StageMode::Enter() noexcept
 
         for (const HWND window : windows)
         {
-            if (!StageAdopt::IsEligible(Describe(window)))
+            MonitorStage* stage = nullptr;
+            std::optional<StageState::Entry> original;
+            if (Consider(window, stage, original))
             {
-                continue;
-            }
-
-            auto* stage = StageFor(window);
-            const auto original = Capture(window);
-            if (!stage || !original || !StageConfig::HasRoom(stage->order.size(), StageConfig::CapacityOf(*stage->layout)))
-            {
-                continue; // No room: the window is left as it is (Scan takes it when there is)
+                continue; // The reason is in the log
             }
 
             Managed m;
@@ -1023,15 +1145,11 @@ void StageMode::Enter() noexcept
             taken.emplace_back(m.id, stage);
             const int id = m.id;
             m_windows.emplace(id, std::move(m));
-            if (window == foreground)
-            {
-                stage->order.insert(stage->order.begin(), id);
-            }
-            else
-            {
-                stage->order.push_back(id);
-            }
+            stage->order.push_back(id);
+            LogDecision(window, L"adopted");
         }
+
+        Logger::info(L"Stage: entering with {} of {} windows on {} monitors (foreground hwnd={:x})", taken.size(), windows.size(), m_stages.size(), reinterpret_cast<uintptr_t>(foreground));
 
         // BEFORE the first move: the state file lists every window and the place it has now
         if (!WriteState())
@@ -1053,7 +1171,8 @@ void StageMode::Enter() noexcept
         }
 
         LandAll();
-        m_scanAt = GetTickCount64() + ScanDelayMillis;
+        m_scansLeft = ScansAfterEnter;
+        m_scanAt = now + ScanDelayMillis;
         Schedule(TickMillis);
     }
     catch (...)
@@ -1066,6 +1185,9 @@ void StageMode::Leave() noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
+        m_enterAt = 0; // A pending Enter is cancelled, whether or not the stage is up
+        m_enterSince = 0;
         if (!m_active)
         {
             return;
@@ -1079,6 +1201,7 @@ void StageMode::Leave() noexcept
 
         m_pending.clear();
         m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = 0;
+        m_scansLeft = 0;
 
         // Everything goes back; what can't (not responding) stays in the file
         m_orphanTries = 0;
@@ -1087,6 +1210,8 @@ void StageMode::Leave() noexcept
         m_stages.clear();
         WriteState(); // Deletes the file when nothing is left
         PublishHeld();
+        m_enterNotBefore = GetTickCount64() + LeaveSettleMillis; // The restores are async: a quick toggle back waits for them
+        Logger::info(L"Stage: left, windows restored");
         if (!m_orphans.empty())
         {
             m_orphanAt = GetTickCount64() + OrphanMillis;
@@ -1112,6 +1237,7 @@ void StageMode::OnTimer() noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
         if (m_timerWindow)
         {
             KillTimer(m_timerWindow, m_timerId);
@@ -1120,14 +1246,40 @@ void StageMode::OnTimer() noexcept
         const auto now = GetTickCount64();
         if (!m_active)
         {
-            if (!m_orphans.empty() && now >= m_orphanAt)
+            if (m_enterAt && now >= m_enterAt)
+            {
+                m_enterAt = 0;
+                if (Arrange::IsStage())
+                {
+                    Enter(); // Was waiting for a Leave or the desktop scroll to finish; it schedules what it needs itself
+                    if (m_active)
+                    {
+                        return;
+                    }
+                }
+            }
+
+            if (!m_orphans.empty() && m_orphanTries < MaxOrphanTries && now >= m_orphanAt)
             {
                 RetryOrphans();
             }
 
+            // The earliest of what is due: a pending Enter, or the next orphan retry (which stops after MaxOrphanTries)
+            ULONGLONG next = 0;
+            if (m_enterAt)
+            {
+                next = m_enterAt;
+            }
+
             if (!m_orphans.empty() && m_orphanTries < MaxOrphanTries)
             {
-                Schedule(static_cast<UINT>(OrphanMillis)); // Bounded: after MaxOrphanTries the timer stops
+                next = next ? (std::min)(next, m_orphanAt) : m_orphanAt;
+            }
+
+            if (next)
+            {
+                const ULONGLONG wait = next > now ? next - now : 1;
+                Schedule(static_cast<UINT>(wait < OrphanMillis ? wait : OrphanMillis));
             }
 
             return;
@@ -1154,6 +1306,10 @@ void StageMode::OnTimer() noexcept
         {
             m_scanAt = 0;
             Scan();
+            if (--m_scansLeft > 0)
+            {
+                m_scanAt = now + ScanRepeatMillis; // Stragglers: windows that were not ready, or still on their way back
+            }
         }
 
         if (m_guardAt && now >= m_guardAt)
@@ -1216,6 +1372,7 @@ void StageMode::SettingsChanged() noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
         if (m_active)
         {
             ApplyValues(StageConfig::FromSettings(FancyZonesSettings::settings())); // Also the gap and the margins
@@ -1245,6 +1402,7 @@ void StageMode::SetLayoutName(const std::wstring& name) noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
         const auto& names = StageLayouts::LayoutNames();
         if (m_active && std::find(names.begin(), names.end(), StageConfig::Narrow(name)) != names.end())
         {
@@ -1263,6 +1421,7 @@ void StageMode::SetMasterCut(double ratio) noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
         if (m_active)
         {
             auto after = m_values;
@@ -1280,6 +1439,7 @@ void StageMode::SetRows(const std::vector<double>& rows) noexcept
 {
     try
     {
+        StageDpi::Scope dpi;
         if (m_active)
         {
             auto after = m_values;

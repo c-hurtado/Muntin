@@ -1092,6 +1092,12 @@ bool DesktopScroll::IsParked(HWND window) noexcept
     return parkedWindows.contains(window);
 }
 
+bool DesktopScroll::AnyParked() noexcept
+{
+    std::lock_guard lock(parkedLock);
+    return !parkedWindows.empty();
+}
+
 HWND DesktopScroll::TakeLandedWindow() noexcept
 {
     return m_impl->landedRider.exchange(nullptr);
