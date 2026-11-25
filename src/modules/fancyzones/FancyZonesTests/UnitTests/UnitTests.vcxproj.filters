@@ -45,6 +45,9 @@
     <ClCompile Include="StageMode.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="StageKeys.Spec.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="StageMouse.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

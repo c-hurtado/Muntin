@@ -49,6 +49,7 @@
     <ClCompile Include="DockTree.Spec.cpp" />
     <ClCompile Include="StageLayouts.Spec.cpp" />
     <ClCompile Include="StageMode.Spec.cpp" />
+    <ClCompile Include="StageKeys.Spec.cpp" />
     <ClCompile Include="StageMouse.Spec.cpp" />
     <ClCompile Include="FancyZonesSettings.Spec.cpp" />
     <ClCompile Include="JsonHelpers.Tests.cpp" />

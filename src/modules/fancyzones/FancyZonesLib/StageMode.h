@@ -13,6 +13,7 @@
 
 #include <FancyZonesLib/StageAdopt.h>
 #include <FancyZonesLib/StageConfig.h>
+#include <FancyZonesLib/StageKeys.h>
 #include <FancyZonesLib/StageLayouts.h>
 #include <FancyZonesLib/StageMouse.h>
 #include <FancyZonesLib/StagePark.h>
@@ -55,6 +56,12 @@ public:
     void DragEnd(HWND window) noexcept; // MOVESIZEEND (Esc ends the drag too: the window is back at its start rect, so it snaps back)
     void OnDragTimer() noexcept;
     bool Dragging() const noexcept { return m_drag.has_value(); }
+
+    // Keys (main thread). The keyboard hook asks KeyTarget() which window a chord acts on (null: the key passes through) and posts the
+    // action; KeyAction runs it. NoteForeground at every foreground change keeps the "last managed foreground".
+    HWND KeyTarget() noexcept;
+    void NoteForeground(HWND foreground) noexcept; // the window of the foreground event
+    void KeyAction(StageKeys::Action action, HWND target) noexcept;
 
     void DisplayChanged() noexcept;
     void SettingsChanged() noexcept; // gap, margins, layout, cut or rows changed in settings.json
@@ -159,6 +166,9 @@ private:
     static bool RestoreEntry(const StageState::Entry& entry, const std::vector<Rect>& monitors, bool minimized);
     static std::vector<StageState::Entry> RestoreEntries(const std::vector<StageState::Entry>& entries);
 
+    StageKeys::ForegroundFacts ForegroundOf(HWND foreground);
+
+    StageKeys::Tracker m_keyTracker;
     HWND m_timerWindow{};
     UINT_PTR m_timerId{};
     UINT_PTR m_dragTimerId{};

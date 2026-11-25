@@ -37,6 +37,7 @@
 #include <FancyZonesLib/on_thread_executor.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/SettingsObserver.h>
+#include <FancyZonesLib/StageKeys.h>
 #include <FancyZonesLib/StageMode.h>
 #include <FancyZonesLib/trace.h>
 #include <FancyZonesLib/util.h>
@@ -477,7 +478,7 @@ public:
             break;
 
         case EVENT_SYSTEM_FOREGROUND:
-            PostMessageW(m_window, WM_PRIV_CAPTION_BUTTONS_REFRESH, 0, 0);
+            PostMessageW(m_window, WM_PRIV_CAPTION_BUTTONS_REFRESH, wparam, 0); // wparam: the window that took the foreground
             break;
 
         case EVENT_SYSTEM_MINIMIZESTART:
@@ -574,6 +575,8 @@ private:
     HWND m_resizedWindow{}; // Window being resized by the user
     RECT m_resizedWindowRect{}; // Its frame when the resize started
     bool m_dockClaimPending{}; // The claim of the slots kept for apps is about to be tried again
+    StageKeys::Gate m_stageKeyGate; // The stage chords that were swallowed (their key-up is swallowed too) and the actions waiting
+    bool m_stageMaskSent{}; // A mask key went out during this Win press
     DWORD m_dockSlotKey{}; // Key of the dock hotkey that is held down, for those that act once per press
     std::vector<std::pair<HWND, ULONGLONG>> m_dockNewWindows; // Windows waiting to be docked, and until when
     std::wstring m_dockLoadName; // Named dock layout to load on WM_PRIV_DOCK_LOAD, empty when none is pending
@@ -1003,6 +1006,32 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
         PostMessageW(m_window, WM_PRIV_MONITOR_ROTATION_PREVIEW_HIDE, 0, 0);
     }
 
+    // Stage mode keys: only these chords, only when Stage holds the foreground window (or the last held one while the shell has the focus).
+    // Everything else, and the dock keys below, are not touched in stage mode.
+    if (Arrange::IsStage() && m_stageMode && m_stageMode->Active())
+    {
+        m_stageKeyGate.Prune([](uint32_t vk) { return (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0; }, info->vkCode); // A key-up the hook never saw
+        const auto action = StageKeys::Lookup(StageKeys::DefaultBindings(), StageKeys::Mods(win, shift, ctrl, alt), info->vkCode);
+        StageKeys::Action usable = StageKeys::Action::None;
+        HWND target = nullptr;
+        if (action != StageKeys::Action::None)
+        {
+            target = m_stageMode->KeyTarget();
+            usable = target ? action : StageKeys::Action::None;
+        }
+
+        const auto decision = m_stageKeyGate.OnDown(usable, info->vkCode);
+        if (decision.fire)
+        {
+            PostMessageW(m_window, WM_PRIV_STAGE_KEY, static_cast<WPARAM>(usable), reinterpret_cast<LPARAM>(target));
+        }
+
+        if (decision.swallow)
+        {
+            return true;
+        }
+    }
+
     // Shift+Win+arrows move the foreground window in the dock layout
     const bool dockKeys = !Arrange::IsStage(); // Stage mode freezes the dock trees: the dock keys keep their Windows meaning
     if (dockKeys && win && shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
@@ -1125,15 +1154,20 @@ FancyZones::OnKeyUp(PKBDLLHOOKSTRUCT info) noexcept
         m_dockSlotKey = 0;
     }
     m_monitorRotationKeyState.Update(info->vkCode, false);
+    const bool stageUp = m_stageKeyGate.OnUp(info->vkCode); // The key-up of a swallowed stage chord key: no stuck key
+    if (info->vkCode == VK_LWIN || info->vkCode == VK_RWIN)
+    {
+        m_stageMaskSent = false;
+    }
 
     if (wasMonitorRotationPreviewActive && !IsMonitorRotationChordDown())
     {
         m_monitorRotationPreviewActive = false;
         PostMessageW(m_window, WM_PRIV_MONITOR_ROTATION_PREVIEW_HIDE, 0, 0);
-        return isActivatorKey || wasConsumed;
+        return isActivatorKey || wasConsumed || stageUp;
     }
 
-    return wasConsumed;
+    return wasConsumed || stageUp;
 }
 
 bool FancyZones::IsMonitorRotationChordDown() const noexcept
@@ -1296,6 +1330,27 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             else
             {
                 DockKey(wparam, static_cast<LONG>(lparam));
+            }
+        }
+        else if (message == WM_PRIV_STAGE_KEY)
+        {
+            m_stageKeyGate.Completed();
+            const bool winDown = (GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000);
+            if (StageKeys::ShouldMask(m_stageMaskSent, winDown))
+            {
+                // The chord's key was swallowed: a key between Win down and Win up stops Win from opening Start (as DesktopScroll does).
+                // Not when Win is already up: that press has had its Start, and the next one still needs its mask.
+                m_stageMaskSent = true;
+                INPUT inputs[2]{};
+                inputs[0].type = inputs[1].type = INPUT_KEYBOARD;
+                inputs[0].ki.wVk = inputs[1].ki.wVk = 0xE8;
+                inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
+            }
+
+            if (m_stageMode)
+            {
+                m_stageMode->KeyAction(static_cast<StageKeys::Action>(wparam), reinterpret_cast<HWND>(lparam));
             }
         }
         else if (message == WM_PRIV_INIT)
@@ -1503,6 +1558,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             if (message == WM_PRIV_CAPTION_BUTTONS_REFRESH && m_stageMode && Arrange::IsStage())
             {
                 m_stageMode->ScheduleRehome(); // Posted on a foreground change: a window may have been moved to the other monitor
+                m_stageMode->NoteForeground(reinterpret_cast<HWND>(wparam)); // The last managed foreground, for the keys
             }
 
             UpdateCaptionButtons();
@@ -2105,6 +2161,9 @@ void FancyZones::SettingsUpdate(SettingId id)
             {
                 m_stageMode->Leave(); // Every window goes back where it was
             }
+
+            m_stageKeyGate.Reset();
+            m_stageMaskSent = false;
         }
 
         UpdateCaptionButtons();

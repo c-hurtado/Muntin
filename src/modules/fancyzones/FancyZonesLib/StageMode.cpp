@@ -1613,6 +1613,7 @@ void StageMode::Leave() noexcept
         }
 
         m_active = false;
+        m_keyTracker.Reset();
         StopDrag(false);
         if (m_timerWindow)
         {
@@ -1798,6 +1799,173 @@ void StageMode::OnTimer() noexcept
     catch (...)
     {
         Logger::error(L"Stage: timer failed");
+    }
+}
+
+#pragma endregion
+
+#pragma region keys
+
+StageKeys::ForegroundFacts StageMode::ForegroundOf(HWND foreground)
+{
+    StageKeys::ForegroundFacts facts;
+    const HWND root = foreground ? GetAncestor(foreground, GA_ROOT) : nullptr;
+    facts.window = reinterpret_cast<uintptr_t>(root);
+    if (!root)
+    {
+        facts.transient = true; // No foreground window while focus moves: not the user leaving
+        return facts;
+    }
+
+    facts.held = Find(root) != nullptr && !IsIconic(root); // A minimized window is not held for the keys
+    if (!facts.held)
+    {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(root, &pid);
+        wchar_t cls[128]{};
+        GetClassNameW(root, cls, ARRAYSIZE(cls));
+        facts.transient = StageKeys::IsTransient(cls, static_cast<uint64_t>(GetWindowLongPtrW(root, GWL_EXSTYLE)), pid == GetCurrentProcessId());
+    }
+
+    return facts;
+}
+
+void StageMode::NoteForeground(HWND foreground) noexcept
+{
+    try
+    {
+        if (m_active)
+        {
+            m_keyTracker.Note(ForegroundOf(foreground));
+        }
+    }
+    catch (...)
+    {
+    }
+}
+
+HWND StageMode::KeyTarget() noexcept
+{
+    try
+    {
+        if (!m_active || m_drag)
+        {
+            return nullptr;
+        }
+
+        const auto facts = ForegroundOf(GetForegroundWindow());
+        m_keyTracker.Note(facts);
+        return reinterpret_cast<HWND>(m_keyTracker.Resolve(facts, [&](uintptr_t window) {
+            const auto hwnd = reinterpret_cast<HWND>(window);
+            return IsWindow(hwnd) && !IsIconic(hwnd) && Find(hwnd) != nullptr;
+        }));
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
+void StageMode::KeyAction(StageKeys::Action action, HWND target) noexcept
+{
+    try
+    {
+        StageDpi::Scope dpi;
+        using StageKeys::Action;
+        if (!m_active || m_drag)
+        {
+            return;
+        }
+
+        if (action == Action::CycleLayout)
+        {
+            const auto next = StageLayouts::NextLayoutName(StageConfig::Narrow(m_values.layout));
+            const std::wstring name(next.begin(), next.end());
+            Logger::info(L"Stage: key {}: {}", StageKeys::Name(action), name);
+            SetLayoutName(name); // Saved to settings.json; the master layout runs until the strip is drawn (Phase 4)
+            return;
+        }
+
+        auto* m = Find(target);
+        MonitorStage* stage = m ? StageOfId(m->id) : nullptr;
+        if (!m || !stage || !IsWindow(m->window) || IsIconic(m->window))
+        {
+            return; // Never act on a minimized window
+        }
+
+        if (action == Action::MoveToPrevMonitor || action == Action::MoveToNextMonitor)
+        {
+            std::vector<StageKeys::MonitorPos> positions;
+            int from = -1;
+            for (size_t i = 0; i < m_stages.size(); i++)
+            {
+                positions.push_back({ m_stages[i].monitor.rect.L, m_stages[i].monitor.rect.T });
+                if (&m_stages[i] == stage)
+                {
+                    from = static_cast<int>(i);
+                }
+            }
+
+            const int to = StageKeys::NextMonitor(positions, from, action == Action::MoveToNextMonitor ? 1 : -1);
+            if (to < 0 || to == from)
+            {
+                return; // One monitor: nothing to do
+            }
+
+            auto& destination = m_stages[to];
+            if (!StageConfig::HasRoom(destination.order.size(), StageConfig::CapacityOf(*destination.layout)))
+            {
+                Logger::info(L"Stage: key {} hwnd={:x}: no room on monitor {}", StageKeys::Name(action), reinterpret_cast<uintptr_t>(m->window), to);
+                return;
+            }
+
+            Logger::info(L"Stage: key {} hwnd={:x} class={}", StageKeys::Name(action), reinterpret_cast<uintptr_t>(m->window), ClassOf(m->window));
+            Rehome(m->id, *stage, destination); // Writes the state file (original place shifted) before anything moves
+            return;
+        }
+
+        const auto iconic = [&](int id) {
+            const auto it = m_windows.find(id);
+            return it == m_windows.end() || !IsWindow(it->second.window) || IsIconic(it->second.window);
+        };
+        bool changed = false;
+        switch (action)
+        {
+        case Action::RotateBack:
+        case Action::RotateForward:
+        {
+            const int dir = action == Action::RotateBack ? -1 : 1;
+            changed = StageKeys::RotateToLive(
+                stage->order, [&](std::vector<int>& o) { return stage->layout->Rotate(o, dir); }, [&](int id) { return !iconic(id); }); // A minimized window does not take the master slot
+            break;
+        }
+        case Action::Promote:
+            changed = stage->layout->Promote(stage->order, m->id);
+            break;
+        case Action::Demote:
+            changed = stage->layout->Demote(stage->order, m->id);
+            break;
+        default:
+            return;
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        Logger::info(L"Stage: key {} hwnd={:x} class={}", StageKeys::Name(action), reinterpret_cast<uintptr_t>(m->window), ClassOf(m->window));
+        Land(*stage); // The order is not in the state file: no write
+        const int focusId = action == Action::Promote ? m->id : StageKeys::FocusChoice(stage->order, iconic);
+        const auto focus = m_windows.find(focusId);
+        if (focusId != 0 && focus != m_windows.end() && IsWindow(focus->second.window) && !IsIconic(focus->second.window) && focus->second.window != GetForegroundWindow())
+        {
+            FancyZonesWindowUtils::SwitchToWindow(focus->second.window); // The new master (a promoted window keeps the focus)
+        }
+    }
+    catch (...)
+    {
+        Logger::error(L"Stage: key action failed");
     }
 }
 

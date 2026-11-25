@@ -28,6 +28,7 @@ extern UINT WM_PRIV_CAPTION_BUTTONS_REFRESH; // The foreground window changed: t
 extern UINT WM_PRIV_DOCK_LOAD; // Scheduled when a named dock layout is to be loaded
 extern UINT WM_PRIV_DESKTOP_SCROLL; // A monitor reached another page. wparam is the HMONITOR, null when all of them are back on page 0; lparam is the page
 extern UINT WM_PRIV_DOCK_EXPAND; // Middle click somewhere: lparam is the point. A title bar there expands its window.
+extern UINT WM_PRIV_STAGE_KEY; // A Stage mode chord was swallowed: wparam is the StageKeys::Action, lparam the target window
 extern UINT WM_PRIV_DOCK_SLOT; // Scheduled when we receive a key down press to save (wparam is non-zero) or recall a dock layout
 
 void InitializeWinhookEventIds();
