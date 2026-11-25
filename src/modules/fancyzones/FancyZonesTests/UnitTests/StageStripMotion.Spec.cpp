@@ -356,6 +356,62 @@ namespace StageStripMotionUnitTests
             }
         }
 
+        TEST_METHOD(OnlyTheWheelScrollEases)
+        {
+            Assert::IsFalse(AnimateStructuralChanges, L"structural changes land at once");
+            Assert::IsTrue(ScrollAnimation);
+            Assert::IsTrue(ShouldAnimate(true, true, false), L"a wheel step slides");
+            Assert::IsFalse(ShouldAnimate(false, true, false), L"promote, demote, swap, layout switch, window added or removed: instant");
+            Assert::IsFalse(ShouldAnimate(true, false, false), L"a new overlay never animates");
+            Assert::IsFalse(ShouldAnimate(true, true, true), L"a moved overlay snaps");
+            // the flags bring the old behaviour back
+            Assert::IsTrue(ShouldAnimate(false, true, false, true, true));
+            Assert::IsFalse(ShouldAnimate(true, true, false, true, false), L"scroll animation off");
+        }
+
+        TEST_METHOD(AnInstantChangeLeavesNothingMoving)
+        {
+            // what Apply does for a picture that does not animate: every tile is at its final rect, nothing is active (the timer stops)
+            const auto full = Full(8, 3);
+            std::map<std::uintptr_t, Motion> motion;
+            for (const auto& t : ProjectSlide(full, 2, 2).tiles)
+            {
+                motion[t.window] = Motion::At(t.rect, 0);
+            }
+
+            const auto slide = ProjectSlide(full, 3, 2); // a wheel step starts a slide
+            for (const auto& t : slide.tiles)
+            {
+                const auto it = motion.find(t.window);
+                if (it != motion.end())
+                {
+                    Retarget(it->second, t.rect, 10);
+                }
+                else
+                {
+                    motion[t.window] = Motion::At(t.rect, 10);
+                }
+            }
+
+            Step(motion.begin()->second, 60, 300, Linear);
+            Assert::IsTrue(std::any_of(motion.begin(), motion.end(), [](const auto& m) { return m.second.Active(); }), L"sliding");
+
+            // an instant change (a window removed) while it slides: every tile of the final picture snaps to its rect
+            const auto after = ProjectSlide(Full(7, 3), 3, 2);
+            std::map<std::uintptr_t, Motion> next;
+            for (const auto& t : after.tiles)
+            {
+                next[t.window] = Motion::At(t.rect, 70);
+            }
+
+            Assert::IsFalse(std::any_of(next.begin(), next.end(), [](const auto& m) { return m.second.Active(); }), L"nothing moving: the timer stops");
+            for (const auto& t : after.tiles)
+            {
+                Assert::IsTrue(next[t.window].cur.Same(t.rect), L"drawn where it belongs: hover and hits use it");
+                Assert::AreEqual(std::uintptr_t{ t.window }, HitDrawn(after.tiles, next, t.rect.L + 1, t.rect.T + 1));
+            }
+        }
+
         TEST_METHOD(HitTestFollowsTheProjectedTiles)
         {
             const auto shown = Project(Full(6, 3), 2);

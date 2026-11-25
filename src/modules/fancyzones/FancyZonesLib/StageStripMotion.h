@@ -60,6 +60,18 @@ namespace StageStripMotion
         return shown;
     }
 
+    // What eases: only the wheel scroll slides the tiles. A structural change (promote, demote, swap, a window added or removed, a layout
+    // switch, a rehome) lands at once: the tiles jump to their final rects, new ones appear in place, removed ones disappear. The two
+    // flags make it a one-line change to bring the old easing of structural changes back.
+    constexpr bool AnimateStructuralChanges = false;
+    constexpr bool ScrollAnimation = true;
+
+    // fromWheel: the picture is the one of a wheel step. An overlay that moved or was created never animates.
+    constexpr bool ShouldAnimate(bool fromWheel, bool isUpdate, bool areaChanged, bool animateStructural = AnimateStructuralChanges, bool scrollAnimation = ScrollAnimation)
+    {
+        return isUpdate && !areaChanged && (fromWheel ? scrollAnimation : animateStructural);
+    }
+
     // The part of a rect inside a clip (an empty rect when they do not meet): a tile on its way in or out of the strip is cut at the
     // edge of the strip, not drawn over what lies beyond
     inline LRect ClipRect(const LRect& r, const LRect& clip)

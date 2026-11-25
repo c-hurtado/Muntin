@@ -80,6 +80,7 @@ struct StageStrip::Impl
     std::vector<View> views;
     std::set<std::uintptr_t> liveSeen; // windows the renderer found live itself after the main thread said they were not
     std::map<std::uintptr_t, StageStripPlan::Tile> gaveUp; // tiles still not in order after a whole cycle: not retried until their tile changes
+    bool scrollRefresh{}; // the Refresh in progress is a wheel step: the only picture whose tiles ease
     int settleStep{};
     bool settleTimerOn{};
     bool settleTroubled{}; // something was not in order during this settle cycle: it is logged
@@ -430,7 +431,9 @@ struct StageStrip::Impl
                 {
                     view.offset = offset;
                     memory.Remember(view.full.key, view.full.layout, offset);
+                    scrollRefresh = true; // only this picture slides
                     Refresh();
+                    scrollRefresh = false;
                     if (auto* again = Find(overlay))
                     {
                         RefreshHover(*again);
@@ -559,7 +562,7 @@ struct StageStrip::Impl
 
         // Tiles ease to their new places from where they are drawn; new ones appear in place, and a moved overlay snaps
         const auto now = GetTickCount64();
-        const bool animate = change.kind == StageStripPlan::Kind::Update && !change.areaChanged;
+        const bool animate = StageStripMotion::ShouldAnimate(scrollRefresh, change.kind == StageStripPlan::Kind::Update, change.areaChanged); // a structural change lands at once (snaps a running slide too)
         std::erase_if(s->motion, [&](const auto& m) { return !StageStripPlan::FindTile(s->strip.tiles, m.first); });
         for (const auto& tile : s->strip.tiles)
         {
