@@ -73,21 +73,31 @@ namespace StageStripPlanUnitTests
             Assert::IsTrue(strip->tiles[1].live);
         }
 
-        TEST_METHOD(TilesThatWouldBeClippedAreLeftOut)
+        TEST_METHOD(AllTilesAreKeptAndFitCountsTheOnesInside)
         {
-            // 1080 px high: only so many tiles fit inside the usable area, the others get no tile (no scrolling yet)
+            // 1080 px high: only so many tiles fit inside the usable area; the others stay in the list and are reached by scrolling
             const auto stage = StageLayouts::MakeStage();
             const auto plan = PlanOf(*stage, 12);
             const auto strip = Build(L"m", plan, Src);
             Assert::IsTrue(strip.has_value());
-            Assert::IsTrue(strip->tiles.size() < 11u && strip->tiles.size() >= 1u);
-            for (const auto& t : strip->tiles)
+            Assert::AreEqual(size_t{ 11 }, strip->tiles.size());
+            Assert::IsTrue(strip->fit >= 1 && strip->fit < 11);
+            for (int i = 0; i < strip->fit; i++)
             {
-                Assert::IsTrue(t.rect.Inside(plan.Area));
+                Assert::IsTrue(strip->tiles[i].rect.Inside(plan.Area));
             }
 
-            // the same count the capacity rule gives
-            Assert::AreEqual(strip->tiles.size() + 1, static_cast<size_t>(StageConfig_CapacityForTest(*stage)));
+            Assert::IsFalse(strip->tiles[strip->fit].rect.Inside(plan.Area));
+
+            // the capacity rule takes every window now that the strip scrolls
+            Assert::AreEqual(StageConfig::StripMaxWindows, StageConfig_CapacityForTest(*stage));
+        }
+
+        TEST_METHOD(FewTilesAllFit)
+        {
+            const auto strip = Build(L"m", PlanOf(*StageLayouts::MakeStage(), 4), Src);
+            Assert::IsTrue(strip.has_value());
+            Assert::AreEqual(3, strip->fit);
         }
 
         TEST_METHOD(BuildKeepsTheInsets)

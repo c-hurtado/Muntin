@@ -52,6 +52,7 @@
     <ClCompile Include="StageKeys.Spec.cpp" />
     <ClCompile Include="StageMouse.Spec.cpp" />
     <ClCompile Include="StageStripPlan.Spec.cpp" />
+    <ClCompile Include="StageStripMotion.Spec.cpp" />
     <ClCompile Include="FancyZonesSettings.Spec.cpp" />
     <ClCompile Include="JsonHelpers.Tests.cpp" />
     <ClCompile Include="Layout.Spec.cpp" />

@@ -722,6 +722,11 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
 
                 return source;
             });
+        if (stage.strip)
+        {
+            stage.strip->layout = stage.layout->Name();
+        }
+
         stage.stripHidden = StripCovered(stage);
     }
 
@@ -2171,6 +2176,20 @@ void StageMode::ApplyValues(const StageConfig::Values& global, const std::map<st
     {
         stage.values = StageConfig::Resolve(m_values, m_monitorMap, stage.monitor.key);
         stage.layout = StageConfig::MakeLayout(stage.values);
+    }
+
+    // A layout with a lower capacity (strip layout -> master): the windows past it go back where they were, they are not parked without a tile
+    for (auto& stage : m_stages)
+    {
+        const auto excess = StageConfig::OverCapacity(stage.order, Capacity(stage));
+        if (!excess.empty())
+        {
+            Logger::info(L"Stage: layout change releases {} window(s) over the capacity of the new layout", excess.size());
+            for (const int id : excess)
+            {
+                Release(id, false, true);
+            }
+        }
     }
 
     LandAll();

@@ -681,8 +681,8 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(9, StageConfig::CapacityOf(*master, work, spacing));
             const int stageCap = StageConfig::CapacityOf(*StageLayouts::MakeStage(), work, spacing);
             const int pairCap = StageConfig::CapacityOf(*StageLayouts::MakePair(), work, spacing);
-            Assert::IsTrue(stageCap > 2 && stageCap < 20, L"main + the tiles that fit");
-            Assert::IsTrue(pairCap >= 3 && pairCap < 20, L"pair: two docked slots + the tiles that fit");
+            Assert::AreEqual(StageConfig::StripMaxWindows, stageCap, L"the strip scrolls: every window is taken");
+            Assert::AreEqual(StageConfig::StripMaxWindows, pairCap);
 
             Assert::IsTrue(StageConfig::HasRoom(0, 9));
             Assert::IsTrue(StageConfig::HasRoom(8, 9));

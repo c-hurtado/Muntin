@@ -34,9 +34,11 @@ namespace StageStripPlan
     {
         std::wstring key; // the monitor: strips with the same key are the same overlay
         LRect area; // the overlay window: the strip zone of the plan
-        std::vector<Tile> tiles;
+        std::vector<Tile> tiles; // every parked window in plan order; the first `fit` lie inside the usable area, the others are scrolled to
+        int fit{}; // how many tiles show at once (the strip scrolls when there are more)
+        std::string layout; // the layout name: another layout resets the scroll
 
-        bool operator==(const Strip& o) const { return key == o.key && area.Same(o.area) && tiles == o.tiles; }
+        bool operator==(const Strip& o) const { return key == o.key && area.Same(o.area) && tiles == o.tiles && fit == o.fit && layout == o.layout; }
     };
 
     inline std::wstring KeyOf(const LRect& monitor)
@@ -77,9 +79,8 @@ namespace StageStripPlan
         return anyZoomed || anyCoversMonitor;
     }
 
-    // The strip of a plan: one tile per StripTile item (in plan order) that lies completely inside the usable area; a tile that would be
-    // clipped (the strip is longer than the screen, there is no scrolling yet) is left out: it gets no thumbnail and cannot be clicked.
-    // No strip in the plan (or no tile): nothing to show.
+    // The strip of a plan: one tile per StripTile item (in plan order), `fit` of them completely inside the usable area; the others are
+    // reached by scrolling (StageStripMotion::Project picks what shows). No strip in the plan (or no tile that fits): nothing to show.
     inline std::optional<Strip> Build(const std::wstring& key, const StageLayouts::Plan& plan, const std::function<Source(int)>& sourceOf)
     {
         if (!plan.HasStrip)
@@ -92,7 +93,7 @@ namespace StageStripPlan
         strip.area = plan.Strip;
         for (const auto& item : plan.Items)
         {
-            if (item.Role != StageLayouts::Role::StripTile || item.Rect.W() <= 0 || item.Rect.H() <= 0 || !item.Rect.Inside(plan.Area))
+            if (item.Role != StageLayouts::Role::StripTile || item.Rect.W() <= 0 || item.Rect.H() <= 0)
             {
                 continue;
             }
@@ -101,10 +102,14 @@ namespace StageStripPlan
             if (source.window)
             {
                 strip.tiles.push_back({ source.window, item.Rect, source.live, source.insets });
+                if (item.Rect.Inside(plan.Area) && strip.fit == static_cast<int>(strip.tiles.size()) - 1)
+                {
+                    strip.fit++; // the tiles inside are a prefix
+                }
             }
         }
 
-        if (strip.tiles.empty())
+        if (strip.tiles.empty() || strip.fit <= 0)
         {
             return std::nullopt;
         }

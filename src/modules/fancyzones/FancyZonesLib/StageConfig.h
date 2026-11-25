@@ -162,8 +162,11 @@ namespace StageConfig
     // never taken (left alone, not parked). The stage and pair layouts show every window beyond their slots as a strip tile.
     constexpr int MasterMaxStack = 8;
 
-    // How many windows one monitor's stage can show: master + stack; for a layout with a strip, its docked slots plus the strip tiles that
-    // fit completely inside the usable area (there is no scrolling yet: a window without a tile would have no mouse path back).
+    // Windows one monitor's stage takes in a layout with a strip (which scrolls): effectively all.
+    constexpr int StripMaxWindows = 1000;
+
+    // How many windows one monitor's stage can show: master + stack; for a layout with a strip, StripMaxWindows (the strip scrolls),
+    // unless not even one tile fits the screen (then only its docked slots: a window without a tile would have no mouse path back).
     inline int CapacityOf(const StageLayouts::ILayout& layout, const StageLayouts::LRect& work, const StageLayouts::Spacing& spacing)
     {
         constexpr int many = 1000;
@@ -187,12 +190,27 @@ namespace StageConfig
             return slots;
         }
 
-        return slots + (std::max)(0, (plan.Area.H() + plan.Gap) / (plan.TileH + plan.Gap));
+        // The strip scrolls: every window gets a tile, as long as at least one tile fits on the screen
+        const int fit = (std::max)(0, (plan.Area.H() + plan.Gap) / (plan.TileH + plan.Gap));
+        return fit > 0 ? StripMaxWindows : slots;
     }
 
     inline bool HasRoom(size_t managed, int capacity)
     {
         return managed < static_cast<size_t>((std::max)(capacity, 0));
+    }
+
+    // The windows a stage cannot keep when its capacity shrinks (another layout): the ones last in the layout order. They are released,
+    // not parked hidden without a tile.
+    inline std::vector<int> OverCapacity(const std::vector<int>& order, int capacity)
+    {
+        const size_t keep = static_cast<size_t>((std::max)(capacity, 0));
+        if (order.size() <= keep)
+        {
+            return {};
+        }
+
+        return std::vector<int>(order.begin() + static_cast<std::ptrdiff_t>(keep), order.end());
     }
 
     // The layout object for the values, with its cut and rows set
