@@ -26,6 +26,7 @@
 namespace
 {
     constexpr UINT TickMillis = 250;
+    constexpr ULONGLONG ReplanDelayMillis = 300; // a held window changed its shape: its strip tile is planned again once it has settled
     constexpr ULONGLONG NewWindowMinAgeMillis = 400; // a new window is looked at once it has existed this long (a capture overlay lives shorter)
     constexpr ULONGLONG ActivateDebounceMillis = 130; // Alt-Tab cycling: only the window the foreground settles on is promoted
     constexpr ULONGLONG ActivateGraceMillis = 600; // foreground events right after the stage moved the focus itself are its own
@@ -823,6 +824,18 @@ StageLayouts::Plan StageMode::ComputePlan(MonitorStage& stage)
     return plan;
 }
 
+// The plan as the strip is drawn right now (scrolled, cut at the usable area): what the mouse has to hit for a drop to swap
+StageLayouts::Plan StageMode::ScrolledPlan(MonitorStage& stage)
+{
+    auto plan = ComputePlan(stage);
+    if (m_strip)
+    {
+        StageStripPlan::ApplyScroll(plan, m_strip->ScrollOffset(StageStripPlan::KeyOf(stage.monitor.rect)));
+    }
+
+    return plan;
+}
+
 void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
 {
     if (stage.order.empty())
@@ -1583,9 +1596,24 @@ void StageMode::WindowMoved(HWND window) noexcept
 {
     try
     {
-        if (!m_active || !window || !Find(window))
+        auto* held = m_active && window ? Find(window) : nullptr;
+        if (!held)
         {
             return; // Only held windows: the debounce below is not armed by every move on the desktop
+        }
+
+        // A window that changed its shape (a parked one that resized itself, or one that was unmaximized): its strip tile has another
+        // height now. Debounced; only when the aspect moved by more than 5%. Our own moves come through here too and end the same way.
+        RECT rect{};
+        if (!m_drag && held->parked && held->tileAspect > 0 && IsWindow(window) && !IsIconic(window) && GetWindowRect(window, &rect))
+        {
+            const int w = rect.right - rect.left - held->insets.L - held->insets.R;
+            const int h = rect.bottom - rect.top - held->insets.T - held->insets.B;
+            if (w > 0 && h > 0 && StageStripPlan::AspectChanged(held->tileAspect, static_cast<double>(h) / w))
+            {
+                m_replanAt = GetTickCount64() + ReplanDelayMillis;
+                Schedule(static_cast<UINT>(ReplanDelayMillis + 20));
+            }
         }
 
         ArmRehome();
@@ -2036,7 +2064,7 @@ void StageMode::DragEnd(HWND window) noexcept
                 {
                     POINT cursor{};
                     GetCursorPos(&cursor);
-                    facts.targetId = StageMouse::HitTest(ComputePlan(*stage), stage->order, drag.id, cursor.x, cursor.y);
+                    facts.targetId = StageMouse::HitTest(ScrolledPlan(*stage), stage->order, drag.id, cursor.x, cursor.y);
                 }
             }
         }
@@ -2239,7 +2267,7 @@ void StageMode::Leave() noexcept
         m_loose.clear();
         m_exiled.clear();
         m_remeasure = false;
-        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = m_rehomeAt = m_dialogAt = m_activateAt = 0;
+        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = m_rehomeAt = m_dialogAt = m_activateAt = m_replanAt = 0;
         m_activateWindow = nullptr;
         m_scansLeft = 0;
 
@@ -2436,6 +2464,15 @@ void StageMode::OnTimer() noexcept
             PromoteActivated();
         }
 
+        if (m_replanAt && now >= m_replanAt)
+        {
+            m_replanAt = 0;
+            if (!m_drag)
+            {
+                LandAll(); // the tile heights follow the windows' shapes (a plan that did not change moves nothing)
+            }
+        }
+
         if (m_verifyAt && now >= m_verifyAt)
         {
             m_verifyAt = 0;
@@ -2447,12 +2484,12 @@ void StageMode::OnTimer() noexcept
             RetryOrphans();
         }
 
-        if (m_active && !m_stages.empty() && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt && !m_dialogAt && !m_activateAt)
+        if (m_active && !m_stages.empty() && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt && !m_dialogAt && !m_activateAt && !m_replanAt)
         {
             Schedule(static_cast<UINT>(RehomePollMillis)); // Idle: the slow poll is all that is left
         }
 
-        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || m_dialogAt || m_activateAt || (m_active && m_settingsPending) || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
+        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || m_dialogAt || m_activateAt || m_replanAt || (m_active && m_settingsPending) || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
         {
             Schedule(TickMillis);
         }

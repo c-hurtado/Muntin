@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -23,11 +24,6 @@ namespace StageStripMotion
         return (std::max)(0, total - (std::max)(fit, 0));
     }
 
-    inline int ClampOffset(int offset, int total, int fit)
-    {
-        return std::clamp(offset, 0, MaxOffset(total, fit));
-    }
-
     // One wheel notch (120) is one tile. Accumulates what is left of a notch (high resolution wheels send small deltas). Wheel up (positive)
     // scrolls towards the start of the strip: the result is the change of the offset.
     inline int WheelSteps(int& accumulated, int delta)
@@ -36,28 +32,6 @@ namespace StageStripMotion
         const int notches = accumulated / 120; // truncates towards zero
         accumulated -= notches * 120;
         return -notches;
-    }
-
-    // What shows with this scroll offset: `fit` tiles from the offset on, each in the slot rect of its position. Tiles scrolled out
-    // of view are not in the result (no thumbnail, no region, no hit); an offset out of range is clamped.
-    inline Strip Project(const Strip& full, int offset)
-    {
-        Strip shown;
-        shown.key = full.key;
-        shown.area = full.area;
-        shown.fit = full.fit;
-        shown.layout = full.layout;
-        const int total = static_cast<int>(full.tiles.size());
-        const int first = ClampOffset(offset, total, full.fit);
-        const int count = (std::min)((std::max)(full.fit, 0), total - first);
-        for (int i = 0; i < count; i++)
-        {
-            auto tile = full.tiles[static_cast<size_t>(first) + static_cast<size_t>(i)];
-            tile.rect = full.tiles[static_cast<size_t>(i)].rect; // the slot
-            shown.tiles.push_back(tile);
-        }
-
-        return shown;
     }
 
     // What eases: only the wheel scroll slides the tiles. A structural change (promote, demote, swap, a window added or removed, a layout
@@ -95,16 +69,13 @@ namespace StageStripMotion
             return MaxOffset(total, full.fit);
         }
 
-        const int bottom = full.tiles.back().rect.B;
-        for (int k = 0; k < total; k++)
+        std::vector<LRect> rects;
+        for (const auto& t : full.tiles)
         {
-            if (bottom - full.tiles[static_cast<size_t>(k)].rect.T <= full.clip.H())
-            {
-                return k;
-            }
+            rects.push_back(t.rect);
         }
 
-        return total - 1;
+        return StageStripPlan::MaxScrollOffset(rects, full.clip.H());
     }
 
     inline int ClampOffsetFor(const Strip& full, int offset)
@@ -114,9 +85,9 @@ namespace StageStripMotion
 
     // What the strip draws for a scroll offset (the index of the first tile at the top). A scroll moves the whole list up by the height
     // of the tiles before the offset (each tile's own height plus the gap), so tiles of any height keep their places relative to each
-    // other and slide as one. The tiles that meet the clip show; `margin` more wait on each side, just outside the strip, and come in
-    // from there (the clip cuts them: ClipRect). No clip known: the `fit` tiles from the offset.
-    inline Strip ProjectSlide(const Strip& full, int offset, int margin)
+    // other and slide as one. The tiles that meet the clip show; `keep` names more (tiles that are on their way out and must slide off
+    // the strip before they go): they are at the rect they move to. No clip known: the `fit` tiles from the offset.
+    inline Strip ProjectSlide(const Strip& full, int offset, const std::set<std::uintptr_t>* keep = nullptr)
     {
         Strip shown;
         shown.key = full.key;
@@ -132,29 +103,15 @@ namespace StageStripMotion
 
         const int first = ClampOffsetFor(full, offset);
         const int dy = full.tiles[static_cast<size_t>(first)].rect.T - full.tiles.front().rect.T;
-        const auto moved = [&](int i) {
-            auto r = full.tiles[static_cast<size_t>(i)].rect;
-            return LRect(r.L, r.T - dy, r.R, r.B - dy);
-        };
-
-        int visibleFrom = first, visibleTo = first - 1;
         for (int i = 0; i < total; i++)
         {
-            const bool meets = full.clip.H() > 0 ? ClipRect(moved(i), full.clip).H() > 0 : (i >= first && i < first + (std::max)(full.fit, 1));
-            if (meets)
-            {
-                visibleFrom = (std::min)(visibleFrom, i);
-                visibleTo = (std::max)(visibleTo, i);
-            }
-        }
-
-        const int from = (std::max)(0, visibleFrom - (std::max)(margin, 0));
-        const int to = (std::min)(total, visibleTo + 1 + (std::max)(margin, 0));
-        for (int i = from; i < to; i++)
-        {
             auto tile = full.tiles[static_cast<size_t>(i)];
-            tile.rect = moved(i);
-            shown.tiles.push_back(tile);
+            tile.rect = LRect(tile.rect.L, tile.rect.T - dy, tile.rect.R, tile.rect.B - dy);
+            const bool meets = full.clip.H() > 0 ? ClipRect(tile.rect, full.clip).H() > 0 : (i >= first && i < first + (std::max)(full.fit, 1));
+            if (meets || (keep && keep->contains(tile.window)))
+            {
+                shown.tiles.push_back(tile);
+            }
         }
 
         return shown;
@@ -227,6 +184,50 @@ namespace StageStripMotion
         return hovered ? HoverPad : TilePad;
     }
 
+    // What Apply does with the motions of a strip when a new picture comes. A picture that does not animate puts every tile at its rect.
+    // One that does: a tile that was shown eases from where it is drawn; one that comes in starts as far from its rect as the tiles that
+    // stay are from theirs (the same displacement, so the list slides as one and nothing snaps or overlaps); one that goes is dropped.
+    inline void ApplyMotions(std::map<std::uintptr_t, Motion>& motion, const std::vector<StageStripPlan::Tile>& tiles, std::uint64_t now, bool animate)
+    {
+        std::erase_if(motion, [&](const auto& m) { return !StageStripPlan::FindTile(tiles, m.first); });
+        bool haveReference = false;
+        int displacement = 0;
+        if (animate)
+        {
+            for (const auto& tile : tiles)
+            {
+                const auto it = motion.find(tile.window);
+                if (it != motion.end())
+                {
+                    Retarget(it->second, tile.rect, now);
+                    if (!haveReference)
+                    {
+                        displacement = it->second.cur.T - tile.rect.T;
+                        haveReference = true;
+                    }
+                }
+            }
+        }
+
+        for (const auto& tile : tiles)
+        {
+            const auto it = motion.find(tile.window);
+            if (it != motion.end() && animate)
+            {
+                continue;
+            }
+
+            auto entering = Motion::At(tile.rect, now);
+            if (animate && haveReference && displacement != 0)
+            {
+                entering.cur = LRect(tile.rect.L, tile.rect.T + displacement, tile.rect.R, tile.rect.B + displacement);
+                entering.from = entering.cur;
+            }
+
+            motion[tile.window] = entering;
+        }
+    }
+
     // The tile under a point (screen pixels) where the tiles are DRAWN (their motion), not where they are going: a click or hover during
     // an animation hits what the eye sees. A tile without motion is where the plan has it. 0 = none.
     inline std::uintptr_t HitDrawn(const std::vector<StageStripPlan::Tile>& tiles, const std::map<std::uintptr_t, Motion>& motion, int x, int y)
@@ -253,12 +254,6 @@ namespace StageStripMotion
         static std::wstring KeyOf(const std::wstring& monitor, const std::string& layout)
         {
             return monitor + L"|" + std::wstring(layout.begin(), layout.end());
-        }
-
-        int Recall(const std::wstring& monitor, const std::string& layout, int total, int fit) const
-        {
-            const auto it = offsets.find(KeyOf(monitor, layout));
-            return ClampOffset(it == offsets.end() ? 0 : it->second, total, fit);
         }
 
         // What was remembered, not clamped (the caller clamps it to the strip it has now)

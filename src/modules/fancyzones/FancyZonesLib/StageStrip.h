@@ -21,6 +21,10 @@ public:
     StageStrip(const StageStrip&) = delete;
     StageStrip& operator=(const StageStrip&) = delete;
 
+    // How far the strip of a monitor is scrolled right now (the index of the first tile at the top, as the renderer draws it), for what has to
+    // find the tile under the mouse. A short lock; 0 for a strip that is not shown.
+    int ScrollOffset(const std::wstring& key) const noexcept;
+
     // The strips to show from now on (all of them: a strip that is missing is removed). Empty: nothing shown.
     // wait: returns once the picture is applied, at most half a second (Leave). Otherwise it never waits.
     void Publish(std::vector<StageStripPlan::Strip> strips, bool wait = false) noexcept;

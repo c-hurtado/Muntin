@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include <FancyZonesLib/StageLayouts.h>
+#include <FancyZonesLib/StageMouse.h>
 #include <FancyZonesLib/StageStripMotion.h>
 #include <FancyZonesLib/StageStripPlan.h>
 
@@ -189,6 +190,108 @@ namespace StageStripStretchUnitTests
             Assert::AreEqual(0.5625, StableAspect(0.5625, 0.0), 1e-9, L"unknown now: keep the last");
         }
 
+        TEST_METHOD(OneSmallTileDoesNotStopTheOthersFromShrinking)
+        {
+            // 3 tiles: a tall one, and two little ones (already at their floor); the tall one takes the whole squeeze
+            auto plan = TallPlan(*StageLayouts::MakeStage(), 8); // 7 tiles
+            const int width = TilesOf(plan).front()->Rect.W();
+            const auto aspects = [](int id) { return id == 2 ? 2.5 : 0.4; }; // ~712 high, ~114 high (below the floor of 120)
+            LayoutTiles(plan, aspects);
+            const auto tiles = TilesOf(plan);
+            const int little = static_cast<int>(std::lround(width * 0.4));
+            Assert::IsTrue(little < MinTileHeight, L"the little tiles are below the floor");
+            Assert::AreEqual(little, tiles[1]->Rect.H(), L"a tile under the floor keeps its natural height");
+            Assert::AreEqual(little, tiles[6]->Rect.H());
+            Assert::IsTrue(tiles[0]->Rect.H() < static_cast<int>(std::lround(width * 2.5)), L"the tall one took the squeeze");
+            Assert::AreEqual(plan.Area.B, tiles.back()->Rect.B, L"exact bottom");
+
+            // a mix: the floors alone fit, one tile sits on its floor and the others share the rest
+            auto mixed = TallPlan(*StageLayouts::MakeStage(), 8); // 7 tiles
+            const auto mix = [](int id) { return id == 2 ? 2.5 : (id == 3 ? 0.45 : 1.6); };
+            LayoutTiles(mixed, mix);
+            const auto m = TilesOf(mixed);
+            int total = 0;
+            for (const auto* t : m)
+            {
+                Assert::IsTrue(t->Rect.H() >= (std::min)(MinTileHeight, static_cast<int>(std::lround(width * mix(t->Id)))));
+                total += t->Rect.H();
+            }
+
+            Assert::AreEqual(mixed.Area.B, m.back()->Rect.B, L"exact bottom");
+            Assert::AreEqual(mixed.Gap, m[1]->Rect.T - m[0]->Rect.B);
+        }
+
+        TEST_METHOD(ShrunkTilesAreNarrowerToKeepTheShapeAndCentered)
+        {
+            auto plan = TallPlan(*StageLayouts::MakeStage(), 7); // 6 tiles
+            const int width = TilesOf(plan).front()->Rect.W();
+            const int left = TilesOf(plan).front()->Rect.L;
+            const double aspect = 1.0;
+            LayoutTiles(plan, Same(aspect));
+            const auto tiles = TilesOf(plan);
+            Assert::IsTrue(tiles[0]->Rect.H() < width, L"shrunk below the natural height");
+            Assert::IsTrue(std::abs(tiles[0]->Rect.H() - tiles[0]->Rect.W()) <= 1, L"the window shape kept: as narrow as it is short");
+            Assert::AreEqual(left + (width - tiles[0]->Rect.W()) / 2, tiles[0]->Rect.L, L"centered in the strip");
+            for (const auto* t : tiles)
+            {
+                Assert::IsTrue(t->Rect.L >= left && t->Rect.R <= left + width, L"never outside the strip");
+            }
+
+            // not shrunk: the full width
+            auto few = TallPlan(*StageLayouts::MakeStage(), 3);
+            LayoutTiles(few, Same(1.0));
+            Assert::AreEqual(width, TilesOf(few)[0]->Rect.W());
+
+            // the narrower tile is what is hit and what is clipped
+            const auto strip = Build(L"m", plan, Src);
+            Assert::IsTrue(strip.has_value());
+            const auto& t = strip->tiles[0];
+            Assert::AreEqual(std::uintptr_t{ 0 }, HitTile(strip->tiles, t.rect.L - 3, t.rect.T + 3), L"the band beside a narrow tile is not a tile");
+        }
+
+        TEST_METHOD(ExtraGapNeverExceedsTheCap)
+        {
+            // a leftover whose share is exactly the cap, with a remainder: still not one pixel more than the cap
+            auto plan = TallPlan(*StageLayouts::MakeStage(), 4); // 3 tiles, 2 gaps
+            const int width = TilesOf(plan).front()->Rect.W();
+            const int cap = (std::min)(MaxExtraGapFactor * plan.Gap, MaxExtraGapPx);
+            const int avail = plan.Area.H() - 2 * plan.Gap;
+            // heights h each so that leftover = 2 * cap + 1 (share = cap, remainder 1)
+            const int h = (avail - (2 * cap + 1)) / 3;
+            const double aspect = static_cast<double>(h) / width;
+            LayoutTiles(plan, Same(aspect));
+            const auto tiles = TilesOf(plan);
+            for (size_t i = 1; i < tiles.size(); i++)
+            {
+                Assert::IsTrue(tiles[i]->Rect.T - tiles[i - 1]->Rect.B <= plan.Gap + cap, L"never more than the cap");
+            }
+        }
+
+        TEST_METHOD(DropToSwapHitsTheTileThatIsDrawnWhenTheStripIsScrolled)
+        {
+            auto plan = TallPlan(*StageLayouts::MakeStage(), 20); // 19 tiles at the minimum height, scrolled
+            LayoutTiles(plan, Same(0.5625));
+            const auto unscrolled = plan;
+            const auto tilesBefore = TilesOf(unscrolled);
+            StageStripPlan::ApplyScroll(plan, 4);
+            const auto tiles = TilesOf(plan);
+            // the first tile in view is now the fifth window
+            const auto* firstInView = tiles[4];
+            Assert::AreEqual(plan.Area.T, firstInView->Rect.T);
+            const int x = firstInView->Rect.L + 5, y = firstInView->Rect.T + 5;
+            std::vector<int> order;
+            for (const auto& item : plan.Items)
+            {
+                order.push_back(item.Id);
+            }
+
+            Assert::AreEqual(firstInView->Id, StageMouse::HitTest(plan, order, 0, x, y), L"the drop lands on the window drawn under the cursor");
+            Assert::AreNotEqual(tilesBefore[0]->Id, StageMouse::HitTest(plan, order, 0, x, tilesBefore[0]->Rect.T + 5), L"the tile that scrolled out is not hit any more");
+            // a tile that is out of view has nothing to hit
+            Assert::AreEqual(0, tiles[0]->Rect.W() * tiles[0]->Rect.H());
+            Assert::AreEqual(StageStripPlan::MaxScrollOffset({ LRect(0, 0, 10, 300), LRect(0, 310, 10, 610) }, 400), 1);
+        }
+
         TEST_METHOD(NoStripNothingToLayOut)
         {
             StageLayouts::LayoutInput in;
@@ -223,7 +326,7 @@ namespace StageStripStretchUnitTests
             Assert::AreEqual(0, StageStripMotion::ClampOffsetFor(*strip, -3));
 
             // scrolled all the way down, every tile that is left fits in the strip
-            const auto bottom = StageStripMotion::ProjectSlide(*strip, maxOffset, 0);
+            const auto bottom = StageStripMotion::ProjectSlide(*strip, maxOffset);
             Assert::IsFalse(bottom.tiles.empty());
             for (const auto& t : bottom.tiles)
             {
@@ -232,17 +335,17 @@ namespace StageStripStretchUnitTests
 
             Assert::AreEqual(strip->tiles.back().window, bottom.tiles.back().window);
             // one step down: the list moves up by the height of the first tile and its gap
-            const auto top = StageStripMotion::ProjectSlide(*strip, 0, 0);
-            const auto next = StageStripMotion::ProjectSlide(*strip, 1, 0);
+            const auto top = StageStripMotion::ProjectSlide(*strip, 0);
+            const auto next = StageStripMotion::ProjectSlide(*strip, 1);
             const int dy = strip->tiles[1].rect.T - strip->tiles[0].rect.T;
             Assert::AreEqual(top.tiles[1].window, next.tiles[0].window);
             Assert::AreEqual(top.tiles[1].rect.T - dy, next.tiles[0].rect.T, L"each tile moves by the height of the one before it plus the gap");
             Assert::AreEqual(strip->clip.T, next.tiles[0].rect.T);
 
-            // margin tiles wait outside the clip and are cut by it
-            const auto slide = StageStripMotion::ProjectSlide(*strip, 3, 2);
-            Assert::IsTrue(slide.tiles.size() > StageStripMotion::ProjectSlide(*strip, 3, 0).tiles.size());
-            Assert::IsTrue(slide.tiles.front().rect.T < strip->clip.T, L"waiting above the strip, cut by the clip");
+            // the tiles that keep sliding out of view stay while they do
+            const std::set<std::uintptr_t> keep{ strip->tiles.front().window };
+            const auto slide = StageStripMotion::ProjectSlide(*strip, 3, &keep);
+            Assert::IsTrue(slide.tiles.front().window == strip->tiles.front().window && slide.tiles.front().rect.B <= strip->clip.T, L"waiting above the strip until it has slid off");
 
             // hits and hover follow the projected rects
             const auto& first = top.tiles.front();

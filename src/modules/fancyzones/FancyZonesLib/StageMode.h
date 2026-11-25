@@ -152,6 +152,7 @@ private:
     void Prepare(Managed& m, const Rect& work);
     void Measure(Managed& m, const Rect& work);
     StageLayouts::Plan ComputePlan(MonitorStage& stage);
+    StageLayouts::Plan ScrolledPlan(MonitorStage& stage); // ComputePlan with the strip tiles where the strip is scrolled to
     // skipId: a window the stage leaves where it is (a drop onto another monitor). dockedOnly: the live preview of an edge drag moves
     // the docked windows only (no parking, no dialog scan, no minimum-size check).
     void Land(MonitorStage& stage, int skipId = 0, bool dockedOnly = false);
@@ -229,6 +230,7 @@ private:
     std::map<HWND, ULONGLONG> m_pendingSince; // when a pending window was first seen
     std::map<HWND, StageAdopt::Backoff> m_overlayBackoff; // windows released as overlays: not taken again unchanged for a while
     bool m_activateInGrace{}; // the foreground event came right after the stage's own focus change
+    ULONGLONG m_replanAt{}; // a held window changed its shape: the strip is planned again then
     HWND m_activateWindow{}; // a held window that became the foreground window: promoted once the foreground has settled
     ULONGLONG m_activateAt{};
     ULONGLONG m_graceUntil{}; // the stage changed the focus itself: foreground events before this tick are its own

@@ -24,7 +24,6 @@ namespace
     constexpr COLORREF TileColor = RGB(0x1B, 0x1B, 0x20); // as StageProto's strip
     constexpr COLORREF HoverColor = RGB(0x4A, 0x4A, 0x5C); // the tile under the cursor
     constexpr int CornerRadius = 6; // StageProto's default
-    constexpr int SlideMargin = 2; // tiles kept just outside the strip on each side, so a scroll slides them in and out
     constexpr UINT_PTR AnimTimer = 1;
     constexpr UINT_PTR SettleTimer = 2;
     constexpr UINT AnimMillis = 16; // ~60 Hz, only while a tile moves
@@ -78,6 +77,8 @@ struct StageStrip::Impl
     };
 
     std::vector<View> views;
+    mutable std::mutex offsetLock;
+    std::map<std::wstring, int> offsetMirror; // the scroll offset of every strip as drawn, for the main thread (ScrollOffset)
     std::set<std::uintptr_t> liveSeen; // windows the renderer found live itself after the main thread said they were not
     std::map<std::uintptr_t, StageStripPlan::Tile> gaveUp; // tiles still not in order after a whole cycle: not retried until their tile changes
     bool scrollRefresh{}; // the Refresh in progress is a wheel step: the only picture whose tiles ease
@@ -466,6 +467,50 @@ struct StageStrip::Impl
         }
     }
 
+    // A tile that slid out of view and stopped is taken out: its thumbnail goes, it is no longer drawn (the clip cut it already)
+    void PruneSlidOff(Shown& s) noexcept
+    {
+        const auto view = std::find_if(views.begin(), views.end(), [&](const View& v) { return v.full.key == s.strip.key; });
+        if (view == views.end())
+        {
+            return;
+        }
+
+        std::set<std::uintptr_t> needed;
+        for (const auto& tile : StageStripMotion::ProjectSlide(view->full, view->offset).tiles)
+        {
+            needed.insert(tile.window);
+        }
+
+        bool removed = false;
+        for (auto it = s.strip.tiles.begin(); it != s.strip.tiles.end();)
+        {
+            const auto motion = s.motion.find(it->window);
+            const bool idle = motion != s.motion.end() && !motion->second.Active();
+            if (idle && !needed.contains(it->window) && StageStripMotion::ClipRect(motion->second.cur, s.strip.clip).H() <= 0)
+            {
+                Unregister(s, it->window);
+                s.motion.erase(it->window);
+                if (s.hover == it->window)
+                {
+                    s.hover = 0;
+                }
+
+                it = s.strip.tiles.erase(it);
+                removed = true;
+            }
+            else
+            {
+                ++it;
+            }
+        }
+
+        if (removed)
+        {
+            ApplyRegion(s);
+        }
+    }
+
     void Tick() noexcept
     {
         const auto now = GetTickCount64();
@@ -491,6 +536,8 @@ struct StageStrip::Impl
                 ApplyRegion(s);
                 RefreshHover(s);
             }
+
+            PruneSlidOff(s);
         }
 
         UpdateTimer();
@@ -559,22 +606,10 @@ struct StageStrip::Impl
         // From now on the tiles are the new ones; a thumbnail that could not be registered is stored as not live (retried next time)
         s->strip.tiles = change.next.tiles;
 
-        // Tiles ease to their new places from where they are drawn; new ones appear in place, and a moved overlay snaps
+        // Tiles ease to their new places from where they are drawn (a wheel step only); the others are at their rect at once
         const auto now = GetTickCount64();
-        const bool animate = StageStripMotion::ShouldAnimate(scrollRefresh, change.kind == StageStripPlan::Kind::Update, change.areaChanged); // a structural change lands at once (snaps a running slide too)
-        std::erase_if(s->motion, [&](const auto& m) { return !StageStripPlan::FindTile(s->strip.tiles, m.first); });
-        for (const auto& tile : s->strip.tiles)
-        {
-            const auto it = s->motion.find(tile.window);
-            if (it == s->motion.end() || !animate)
-            {
-                s->motion[tile.window] = StageStripMotion::Motion::At(tile.rect, now);
-            }
-            else
-            {
-                StageStripMotion::Retarget(it->second, tile.rect, now);
-            }
-        }
+        const bool animate = StageStripMotion::ShouldAnimate(scrollRefresh, change.kind == StageStripPlan::Kind::Update, change.areaChanged);
+        StageStripMotion::ApplyMotions(s->motion, s->strip.tiles, now, animate);
 
         if (s->hover && !StageStripPlan::FindTile(s->strip.tiles, s->hover))
         {
@@ -791,7 +826,23 @@ struct StageStrip::Impl
 
         for (const auto& view : views)
         {
-            auto strip = StageStripMotion::ProjectSlide(view.full, view.offset, SlideMargin);
+            // A wheel step: tiles that are shown and move out of view stay until they have slid off (PruneSlidOff takes them out then)
+            std::set<std::uintptr_t> keep;
+            if (scrollRefresh)
+            {
+                for (const auto& s : shown)
+                {
+                    if (s.strip.key == view.full.key)
+                    {
+                        for (const auto& tile : s.strip.tiles)
+                        {
+                            keep.insert(tile.window);
+                        }
+                    }
+                }
+            }
+
+            auto strip = StageStripMotion::ProjectSlide(view.full, view.offset, scrollRefresh ? &keep : nullptr);
             for (auto& tile : strip.tiles)
             {
                 tile.live = tile.live || liveSeen.contains(tile.window);
@@ -803,6 +854,15 @@ struct StageStrip::Impl
         for (const auto& change : StageStripPlan::DiffStrips(now, projected))
         {
             Apply(change);
+        }
+
+        {
+            std::lock_guard guard(offsetLock);
+            offsetMirror.clear();
+            for (const auto& view : views)
+            {
+                offsetMirror[view.full.key] = view.offset;
+            }
         }
 
         UpdateTimer();
@@ -829,6 +889,20 @@ StageStrip::~StageStrip()
     }
 
     m_impl->thread.join();
+}
+
+int StageStrip::ScrollOffset(const std::wstring& key) const noexcept
+{
+    try
+    {
+        std::lock_guard guard(m_impl->offsetLock);
+        const auto it = m_impl->offsetMirror.find(key);
+        return it == m_impl->offsetMirror.end() ? 0 : it->second;
+    }
+    catch (...)
+    {
+        return 0;
+    }
 }
 
 void StageStrip::Publish(std::vector<StageStripPlan::Strip> strips, bool wait) noexcept

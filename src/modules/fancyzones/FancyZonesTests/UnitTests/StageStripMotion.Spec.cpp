@@ -44,10 +44,12 @@ namespace StageStripMotionUnitTests
             Assert::AreEqual(0, MaxOffset(3, 5), L"everything fits: no scrolling");
             Assert::AreEqual(7, MaxOffset(12, 5));
             Assert::AreEqual(0, MaxOffset(0, 0));
-            Assert::AreEqual(0, ClampOffset(-4, 12, 5));
-            Assert::AreEqual(7, ClampOffset(99, 12, 5));
-            Assert::AreEqual(3, ClampOffset(3, 12, 5));
-            Assert::AreEqual(0, ClampOffset(2, 3, 5), L"windows removed: back in range");
+            const auto full = Full(12, 5);
+            Assert::AreEqual(7, MaxOffsetFor(full));
+            Assert::AreEqual(0, ClampOffsetFor(full, -4));
+            Assert::AreEqual(7, ClampOffsetFor(full, 99));
+            Assert::AreEqual(3, ClampOffsetFor(full, 3));
+            Assert::AreEqual(0, ClampOffsetFor(Full(3, 5), 2), L"windows removed: back in range");
         }
 
         TEST_METHOD(WheelNotchesScrollOneTileAndTheRestIsKept)
@@ -62,42 +64,53 @@ namespace StageStripMotionUnitTests
             Assert::AreEqual(2, WheelSteps(acc, -240));
         }
 
-        TEST_METHOD(ProjectShowsFitTilesFromTheOffsetInTheSlots)
+        TEST_METHOD(ProjectShowsTheTilesThatMeetTheClip)
         {
             const auto full = Full(8, 3);
-            auto shown = Project(full, 0);
+            auto shown = ProjectSlide(full, 0);
             Assert::AreEqual(size_t{ 3 }, shown.tiles.size());
             Assert::AreEqual(std::uintptr_t{ 100 }, shown.tiles[0].window);
 
-            shown = Project(full, 2);
+            shown = ProjectSlide(full, 2);
             Assert::AreEqual(size_t{ 3 }, shown.tiles.size());
             Assert::AreEqual(std::uintptr_t{ 102 }, shown.tiles[0].window);
             Assert::AreEqual(std::uintptr_t{ 104 }, shown.tiles[2].window);
             for (size_t i = 0; i < 3; i++)
             {
-                Assert::IsTrue(shown.tiles[i].rect.Same(full.tiles[i].rect), L"each tile sits in the slot of its position");
+                Assert::IsTrue(shown.tiles[i].rect.Same(full.tiles[i].rect), L"each tile sits where the one before the offset was");
             }
 
-            shown = Project(full, 50);
-            Assert::AreEqual(std::uintptr_t{ 105 }, shown.tiles[0].window, L"offset clamped: last window at the end");
+            shown = ProjectSlide(full, 50);
+            Assert::AreEqual(std::uintptr_t{ 105 }, shown.tiles[0].window, L"offset clamped: the last window at the end");
             Assert::AreEqual(size_t{ 3 }, shown.tiles.size());
         }
 
         TEST_METHOD(ProjectWithFewerTilesThanSlots)
         {
-            const auto shown = Project(Full(2, 5), 3);
+            const auto shown = ProjectSlide(Full(2, 5), 3);
             Assert::AreEqual(size_t{ 2 }, shown.tiles.size());
             Assert::AreEqual(std::uintptr_t{ 100 }, shown.tiles[0].window);
-            Assert::AreEqual(size_t{ 0 }, Project(Full(0, 3), 0).tiles.size());
+            Assert::AreEqual(size_t{ 0 }, ProjectSlide(Full(0, 3), 0).tiles.size());
         }
 
         TEST_METHOD(ScrollingMovesTilesAndAddsAndRemovesTheEnds)
         {
             const auto full = Full(6, 3);
-            const auto diff = StageStripPlan::DiffTiles(Project(full, 0).tiles, Project(full, 1).tiles);
+            const auto diff = StageStripPlan::DiffTiles(ProjectSlide(full, 0).tiles, ProjectSlide(full, 1).tiles);
             Assert::AreEqual(size_t{ 1 }, diff.remove.size(), L"the first one scrolled out");
             Assert::AreEqual(size_t{ 1 }, diff.add.size(), L"a new one scrolled in");
             Assert::AreEqual(size_t{ 2 }, diff.move.size(), L"the two that stay move up a slot");
+        }
+
+        TEST_METHOD(TilesThatSlideOutAreKeptUntilTheyHave)
+        {
+            const auto full = Full(6, 3);
+            const std::set<std::uintptr_t> keep{ 100 };
+            const auto shown = ProjectSlide(full, 1, &keep);
+            Assert::AreEqual(size_t{ 4 }, shown.tiles.size(), L"the three in view and the one on its way out");
+            Assert::AreEqual(std::uintptr_t{ 100 }, shown.tiles.front().window);
+            Assert::AreEqual(-60, shown.tiles.front().rect.T, L"at the rect it moves to: above the strip");
+            Assert::AreEqual(size_t{ 3 }, ProjectSlide(full, 1).tiles.size(), L"once it has gone: dropped");
         }
 
         TEST_METHOD(LerpIsExactAtTheEndsAndRounds)
@@ -165,7 +178,7 @@ namespace StageStripMotionUnitTests
 
         TEST_METHOD(HitTestUsesTheDrawnRectDuringAnimation)
         {
-            const auto shown = Project(Full(6, 3), 1); // tile 101 targets slot 0 (y 0..50)
+            const auto shown = ProjectSlide(Full(6, 3), 1); // tile 101 targets slot 0 (y 0..50)
             std::map<std::uintptr_t, Motion> motion;
             for (const auto& t : shown.tiles)
             {
@@ -184,14 +197,15 @@ namespace StageStripMotionUnitTests
         TEST_METHOD(OffsetIsRememberedPerMonitorAndLayout)
         {
             OffsetMemory memory;
-            Assert::AreEqual(0, memory.Recall(L"m", "stage", 12, 5));
+            Assert::AreEqual(0, memory.Raw(L"m", "stage"));
             memory.Remember(L"m", "stage", 4);
-            Assert::AreEqual(4, memory.Recall(L"m", "stage", 12, 5), L"the strip was hidden and shows again: same place");
-            Assert::AreEqual(0, memory.Recall(L"m", "pair", 12, 5), L"another layout starts at the top");
-            Assert::AreEqual(0, memory.Recall(L"other", "stage", 12, 5), L"another monitor");
-            Assert::AreEqual(2, memory.Recall(L"m", "stage", 7, 5), L"fewer windows meanwhile: clamped");
+            Assert::AreEqual(4, ClampOffsetFor(Full(12, 5), memory.Raw(L"m", "stage")), L"the strip was hidden and shows again: same place");
+            Assert::AreEqual(0, memory.Raw(L"m", "pair"), L"another layout starts at the top");
+            Assert::AreEqual(0, memory.Raw(L"other", "stage"), L"another monitor");
+            memory.Remember(L"m", "stage", 9);
+            Assert::AreEqual(MaxOffsetFor(Full(7, 3)), ClampOffsetFor(Full(7, 3), memory.Raw(L"m", "stage")), L"fewer windows meanwhile: back in range");
             memory.Remember(L"m", "pair", 1);
-            Assert::AreEqual(4, memory.Recall(L"m", "stage", 12, 5), L"back to the first layout: still there");
+            Assert::AreEqual(9, memory.Raw(L"m", "stage"), L"back to the first layout: still there");
         }
 
         TEST_METHOD(WindowsOverTheNewCapacityAreTheLastInOrder)
@@ -295,58 +309,134 @@ namespace StageStripMotionUnitTests
             Assert::AreEqual(0, ClipRect(LRect(10, 0, 90, 100), clip).H());
         }
 
-        TEST_METHOD(SlideProjectionKeepsTilesJustOutsideTheStripOnBothSides)
+        // Tiles of any heights, one under the other with a gap of 10, in a strip 600 high
+        static Strip Tall(const std::vector<int>& heights)
         {
-            const auto full = Full(12, 3); // pitch 60
-            auto shown = ProjectSlide(full, 5, 2);
-            Assert::AreEqual(size_t{ 7 }, shown.tiles.size(), L"3 showing + two waiting on each side");
-            Assert::AreEqual(std::uintptr_t{ 103 }, shown.tiles.front().window);
-            Assert::AreEqual(std::uintptr_t{ 109 }, shown.tiles.back().window);
-            Assert::AreEqual(-120, shown.tiles[0].rect.T, L"two slots above the first");
-            Assert::AreEqual(0, shown.tiles[2].rect.T);
-            Assert::AreEqual(120, shown.tiles[4].rect.T);
-            Assert::AreEqual(240, shown.tiles[6].rect.T, L"two slots below the last");
-            Assert::AreEqual(size_t{ 5 }, ProjectSlide(full, 0, 2).tiles.size(), L"at the start: nothing above");
-            Assert::AreEqual(size_t{ 5 }, ProjectSlide(full, 9, 2).tiles.size(), L"at the end: nothing below");
-            Assert::AreEqual(size_t{ 3 }, ProjectSlide(full, 0, 0).tiles.size(), L"no margin: as Project");
+            Strip s;
+            s.key = L"m";
+            s.area = LRect(0, 0, 100, 600);
+            s.clip = LRect(0, 0, 100, 600);
+            int y = 0;
+            for (size_t i = 0; i < heights.size(); i++)
+            {
+                s.tiles.push_back({ std::uintptr_t{ 200 } + i, LRect(10, y, 90, y + heights[i]), true, {} });
+                y += heights[i] + 10;
+            }
+
+            s.fit = 1;
+            return s;
+        }
+
+        TEST_METHOD(ScrollMovesByTheHeightOfTheTilesBeforeTheOffset)
+        {
+            const auto strip = Tall({ 750, 120, 120, 120, 120, 120, 120 });
+            Assert::AreEqual(3, MaxOffsetFor(strip), L"from the fourth tile on, everything left fits in 600");
+            const auto top = ProjectSlide(strip, 0);
+            Assert::AreEqual(size_t{ 1 }, top.tiles.size(), L"the 750 high tile fills the strip");
+            const auto one = ProjectSlide(strip, 1);
+            Assert::AreEqual(std::uintptr_t{ 201 }, one.tiles.front().window);
+            Assert::AreEqual(0, one.tiles.front().rect.T, L"moved up by 750 + the gap");
+            const auto last = ProjectSlide(strip, 3);
+            Assert::AreEqual(std::uintptr_t{ 206 }, last.tiles.back().window);
+            Assert::IsTrue(last.tiles.back().rect.B <= 600, L"the last tile is completely in view");
+        }
+
+        TEST_METHOD(AMultiStepSlideOfTilesOfAnyHeightNeverSnapsOrOverlaps)
+        {
+            const auto strip = Tall({ 750, 120, 120, 120, 120, 120, 120 });
+            std::map<std::uintptr_t, Motion> motion;
+            std::vector<StageStripPlan::Tile> shown;
+            const auto picture = [&](int offset, std::uint64_t now, bool animate) {
+                std::set<std::uintptr_t> keep;
+                for (const auto& t : shown)
+                {
+                    keep.insert(t.window);
+                }
+
+                auto next = ProjectSlide(strip, offset, animate ? &keep : nullptr);
+                ApplyMotions(motion, next.tiles, now, animate);
+                shown = next.tiles;
+            };
+            std::map<std::uintptr_t, int> before;
+            std::uint64_t clock = 0;
+            const auto sample = [&]() {
+                for (auto& entry : motion)
+                {
+                    Step(entry.second, clock, 300, Linear);
+                }
+
+                int previousBottom = 0;
+                bool first = true;
+                for (const auto& t : shown)
+                {
+                    const auto& cur = motion[t.window].cur;
+                    if (!first)
+                    {
+                        Assert::IsTrue(std::abs(cur.T - previousBottom - 10) <= 2, L"constant gap: nothing overlaps, the list slides as one");
+                    }
+
+                    const auto seen = before.find(t.window);
+                    if (seen != before.end())
+                    {
+                        Assert::IsTrue(std::abs(cur.T - seen->second) <= 80, L"no snap: a tile moves a little at a time");
+                    }
+
+                    before[t.window] = cur.T;
+                    previousBottom = cur.B;
+                    first = false;
+                }
+            };
+
+            picture(0, 0, false);
+            sample();
+            const std::vector<int> route{ 1, 2, 3, 2, 1, 0 }; // down, and back up
+            for (const int offset : route)
+            {
+                picture(offset, clock, true); // a wheel step
+                for (int i = 0; i < 12; i++) // 120 ms: the next step comes before the slide has ended
+                {
+                    clock += 10;
+                    sample();
+                }
+            }
+
+            for (int i = 0; i < 40; i++)
+            {
+                clock += 10;
+                sample();
+            }
+
+            Assert::IsFalse(std::any_of(motion.begin(), motion.end(), [](const auto& m) { return m.second.Active(); }), L"the slide ended: the timer can stop");
+            // the tiles that are not in view any more are idle and outside the clip: they can be taken out
+            const auto needed = ProjectSlide(strip, 0);
+            for (const auto& t : shown)
+            {
+                const bool inView = std::any_of(needed.tiles.begin(), needed.tiles.end(), [&](const auto& n) { return n.window == t.window; });
+                Assert::IsTrue(inView || ClipRect(motion[t.window].cur, strip.clip).H() <= 0, L"nothing out of place is left drawn");
+            }
         }
 
         TEST_METHOD(AScrollIsOneSlideOfTheWholeList)
         {
             const auto full = Full(12, 3);
-            const auto before = ProjectSlide(full, 4, 2);
-            const auto after = ProjectSlide(full, 5, 2);
-            const int viewBottom = full.tiles[2].rect.B;
             std::map<std::uintptr_t, Motion> motion;
+            auto before = ProjectSlide(full, 4);
+            ApplyMotions(motion, before.tiles, 0, false);
+            std::set<std::uintptr_t> keep;
             for (const auto& t : before.tiles)
             {
-                motion[t.window] = Motion::At(t.rect, 0);
+                keep.insert(t.window);
             }
 
-            std::vector<std::uintptr_t> staying;
-            for (const auto& t : after.tiles)
-            {
-                const auto it = motion.find(t.window);
-                if (it == motion.end())
-                {
-                    Assert::IsTrue(t.rect.T >= viewBottom, L"a tile that enters appears beyond the edge of the strip, not inside it");
-                    motion[t.window] = Motion::At(t.rect, 0);
-                }
-                else
-                {
-                    Retarget(it->second, t.rect, 0);
-                    staying.push_back(t.window);
-                }
-            }
-
-            const auto duration = 300;
+            const auto after = ProjectSlide(full, 5, &keep);
+            ApplyMotions(motion, after.tiles, 0, true);
             for (const std::uint64_t now : { 0, 75, 150, 225, 300 })
             {
                 std::vector<int> tops;
-                for (const auto window : staying)
+                for (const auto& t : after.tiles)
                 {
-                    auto& m = motion[window];
-                    Step(m, now, duration, Linear);
+                    auto& m = motion[t.window];
+                    Step(m, now, 300, Linear);
                     tops.push_back(m.cur.T);
                 }
 
@@ -372,50 +462,35 @@ namespace StageStripMotionUnitTests
 
         TEST_METHOD(AnInstantChangeLeavesNothingMoving)
         {
-            // what Apply does for a picture that does not animate: every tile is at its final rect, nothing is active (the timer stops)
             const auto full = Full(8, 3);
             std::map<std::uintptr_t, Motion> motion;
-            for (const auto& t : ProjectSlide(full, 2, 2).tiles)
+            const auto first = ProjectSlide(full, 2);
+            ApplyMotions(motion, first.tiles, 0, false);
+            std::set<std::uintptr_t> keep;
+            for (const auto& t : first.tiles)
             {
-                motion[t.window] = Motion::At(t.rect, 0);
+                keep.insert(t.window);
             }
 
-            const auto slide = ProjectSlide(full, 3, 2); // a wheel step starts a slide
-            for (const auto& t : slide.tiles)
-            {
-                const auto it = motion.find(t.window);
-                if (it != motion.end())
-                {
-                    Retarget(it->second, t.rect, 10);
-                }
-                else
-                {
-                    motion[t.window] = Motion::At(t.rect, 10);
-                }
-            }
-
+            ApplyMotions(motion, ProjectSlide(full, 3, &keep).tiles, 10, true); // a wheel step starts a slide
             Step(motion.begin()->second, 60, 300, Linear);
             Assert::IsTrue(std::any_of(motion.begin(), motion.end(), [](const auto& m) { return m.second.Active(); }), L"sliding");
 
-            // an instant change (a window removed) while it slides: every tile of the final picture snaps to its rect
-            const auto after = ProjectSlide(Full(7, 3), 3, 2);
-            std::map<std::uintptr_t, Motion> next;
+            // an instant change (a window removed) while it slides: every tile of the final picture is at its rect, nothing moves
+            const auto after = ProjectSlide(Full(7, 3), 3);
+            ApplyMotions(motion, after.tiles, 70, false);
+            Assert::AreEqual(after.tiles.size(), motion.size(), L"tiles that are gone are dropped");
+            Assert::IsFalse(std::any_of(motion.begin(), motion.end(), [](const auto& m) { return m.second.Active(); }), L"nothing moving: the timer stops");
             for (const auto& t : after.tiles)
             {
-                next[t.window] = Motion::At(t.rect, 70);
-            }
-
-            Assert::IsFalse(std::any_of(next.begin(), next.end(), [](const auto& m) { return m.second.Active(); }), L"nothing moving: the timer stops");
-            for (const auto& t : after.tiles)
-            {
-                Assert::IsTrue(next[t.window].cur.Same(t.rect), L"drawn where it belongs: hover and hits use it");
-                Assert::AreEqual(std::uintptr_t{ t.window }, HitDrawn(after.tiles, next, t.rect.L + 1, t.rect.T + 1));
+                Assert::IsTrue(motion[t.window].cur.Same(t.rect), L"drawn where it belongs: hover and hits use it");
+                Assert::AreEqual(std::uintptr_t{ t.window }, HitDrawn(after.tiles, motion, t.rect.L + 1, t.rect.T + 1));
             }
         }
 
         TEST_METHOD(HitTestFollowsTheProjectedTiles)
         {
-            const auto shown = Project(Full(6, 3), 2);
+            const auto shown = ProjectSlide(Full(6, 3), 2);
             Assert::AreEqual(std::uintptr_t{ 102 }, StageStripPlan::HitTile(shown.tiles, 50, 20), L"the first slot is the third window");
             Assert::AreEqual(std::uintptr_t{ 0 }, StageStripPlan::HitTile(shown.tiles, 50, 55), L"the gap");
             Assert::AreEqual(std::uintptr_t{ 0 }, StageStripPlan::HitTile(shown.tiles, 50, 400), L"scrolled-out tiles cannot be hit");
