@@ -1,16 +1,18 @@
 #include "pch.h"
 #include "StageStrip.h"
+#include <common/logger/logger.h>
 #include "DockMotion.h"
 #include "StageStripMotion.h"
 
 #include <future>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #include <dwmapi.h>
 
-// No logging in this file: it is the render path.
+// No logging in the render path (Place, Tick, Apply): only the settle retry path logs, and only for tiles that are not in order.
 
 namespace
 {
@@ -23,6 +25,7 @@ namespace
     constexpr COLORREF HoverColor = RGB(0x4A, 0x4A, 0x5C); // the tile under the cursor
     constexpr int CornerRadius = 6; // StageProto's default
     constexpr UINT_PTR AnimTimer = 1;
+    constexpr UINT_PTR SettleTimer = 2;
     constexpr UINT AnimMillis = 16; // ~60 Hz, only while a tile moves
 
     double EaseOut(double progress) noexcept
@@ -56,6 +59,7 @@ struct StageStrip::Impl
         HWND overlay{};
         StageStripPlan::Strip strip; // what is applied; a tile whose thumbnail could not be registered is stored as not live, so the next picture retries it
         std::map<std::uintptr_t, HTHUMBNAIL> thumbs;
+        std::map<std::uintptr_t, SIZE> lastSource; // the source size the crop of the thumbnail was computed from
         std::map<std::uintptr_t, StageStripMotion::Motion> motion; // where each tile of 'strip' is drawn, and on its way to where
         std::uintptr_t pressed{};
         std::uintptr_t hover{};
@@ -73,6 +77,11 @@ struct StageStrip::Impl
     };
 
     std::vector<View> views;
+    std::set<std::uintptr_t> liveSeen; // windows the renderer found live itself after the main thread said they were not
+    std::map<std::uintptr_t, StageStripPlan::Tile> gaveUp; // tiles still not in order after a whole cycle: not retried until their tile changes
+    int settleStep{};
+    bool settleTimerOn{};
+    bool settleTroubled{}; // something was not in order during this settle cycle: it is logged
     StageStripMotion::OffsetMemory memory; // survives a strip that is hidden meanwhile
 
     void Run(std::promise<void>& ready) noexcept
@@ -118,6 +127,7 @@ struct StageStrip::Impl
         if (this->control)
         {
             KillTimer(this->control, AnimTimer);
+            KillTimer(this->control, SettleTimer);
             DestroyWindow(this->control);
         }
 
@@ -142,6 +152,10 @@ struct StageStrip::Impl
             if (wparam == AnimTimer)
             {
                 self->Tick();
+            }
+            else if (wparam == SettleTimer)
+            {
+                self->Settle();
             }
 
             return 0;
@@ -261,6 +275,7 @@ struct StageStrip::Impl
         {
             DwmUnregisterThumbnail(it->second);
             s.thumbs.erase(it);
+            s.lastSource.erase(window);
         }
     }
 
@@ -299,11 +314,18 @@ struct StageStrip::Impl
         properties.rcDestination = Local(StageStripMotion::Deflate(rect, StageStripMotion::PadOf(tile.window == s.hover)), s.strip.area);
         // The window without its invisible resize frame: cropped by the frame insets (the title bar stays, as it does not with client-area-only)
         SIZE source{};
-        if (SUCCEEDED(DwmQueryThumbnailSourceSize(it->second, &source)) && source.cx > 0 && source.cy > 0)
+        if (FAILED(DwmQueryThumbnailSourceSize(it->second, &source)))
         {
-            const auto crop = StageStripPlan::SourceCrop(source.cx, source.cy, tile.insets);
+            source = {};
+        }
+
+        s.lastSource[tile.window] = source;
+        // Known size: a valid crop always replaces the old rcSource. Unknown size: no rcSource is sent (DWM keeps the last one; the
+        // settle timer asks again)
+        if (const auto crop = StageStripPlan::CropFor(source.cx, source.cy, tile.insets))
+        {
             properties.dwFlags |= DWM_TNP_RECTSOURCE;
-            properties.rcSource = { crop.L, crop.T, crop.R, crop.B };
+            properties.rcSource = { crop->L, crop->T, crop->R, crop->B };
         }
 
         properties.opacity = 255;
@@ -570,6 +592,131 @@ struct StageStrip::Impl
         {
             ShowWindow(s->overlay, SW_SHOWNOACTIVATE);
         }
+
+        StartSettle();
+    }
+
+    // After a plan change the windows are still being parked, resized and painted: look again a few times (bounded, no polling after)
+    void StartSettle() noexcept
+    {
+        settleStep = 0;
+        settleTroubled = false;
+        settleTimerOn = SetTimer(control, SettleTimer, StageStripMotion::SettleMillis, nullptr) != 0;
+    }
+
+    void StopSettle() noexcept
+    {
+        if (settleTimerOn)
+        {
+            KillTimer(control, SettleTimer);
+            settleTimerOn = false;
+        }
+    }
+
+    static bool WindowLooksLive(HWND window) noexcept
+    {
+        if (!IsWindow(window) || !IsWindowVisible(window) || IsIconic(window))
+        {
+            return false;
+        }
+
+        BOOL cloaked = FALSE;
+        return !(SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked);
+    }
+
+    void Settle() noexcept
+    {
+        if (shown.empty())
+        {
+            gaveUp.clear();
+            StopSettle();
+            return;
+        }
+
+        settleStep++;
+        const int step = settleStep;
+        bool all = true;
+        bool refresh = false;
+        std::vector<StageStripPlan::Tile> notInOrder;
+        for (auto& s : shown)
+        {
+            for (const auto& tile : s.strip.tiles)
+            {
+                const auto given = gaveUp.find(tile.window);
+                if (given != gaveUp.end())
+                {
+                    if (given->second == tile)
+                    {
+                        continue; // given up on with this very tile (rect, liveness, insets): not looked at again
+                    }
+
+                    gaveUp.erase(given); // the plan changed it: another chance
+                }
+
+                const HWND window = reinterpret_cast<HWND>(tile.window);
+                const auto thumb = s.thumbs.find(tile.window);
+                const bool registered = thumb != s.thumbs.end();
+                SIZE now{};
+                HRESULT hr = S_OK;
+                if (registered)
+                {
+                    hr = DwmQueryThumbnailSourceSize(thumb->second, &now);
+                    if (FAILED(hr))
+                    {
+                        now = {};
+                    }
+                }
+
+                const auto lastIt = s.lastSource.find(tile.window);
+                const SIZE last = lastIt != s.lastSource.end() ? lastIt->second : SIZE{};
+                const bool ok = StageStripMotion::TileSettled(registered, tile.live, now.cx, now.cy, last.cx, last.cy);
+                all = all && ok;
+                const bool looksLive = WindowLooksLive(window);
+                if (!tile.live && looksLive && liveSeen.insert(tile.window).second)
+                {
+                    refresh = true; // live after all (or its registration failed): the next picture registers it
+                }
+
+                if (!ok)
+                {
+                    settleTroubled = true;
+                    notInOrder.push_back(tile);
+                }
+
+                if ((!ok && StageStripMotion::ShouldLogStep(step)) || (step == StageStripMotion::ForcedStep && settleTroubled))
+                {
+                    const auto crop = StageStripPlan::CropFor(now.cx, now.cy, tile.insets);
+                    const auto inEffect = StageStripPlan::CropFor(last.cx, last.cy, tile.insets); // what the last Place sent
+                    wchar_t cls[64]{};
+                    GetClassNameW(window, cls, 64);
+                    Logger::info(L"Stage strip settle step={} hwnd={:x} class={} registered={} planLive={} looksLive={} hr={:x} source={}x{} last={}x{} crop={},{},{},{} inEffect={},{},{},{}", step, tile.window, cls, registered, tile.live, looksLive, static_cast<unsigned>(hr), now.cx, now.cy, last.cx, last.cy, crop ? crop->L : -1, crop ? crop->T : -1, crop ? crop->R : -1, crop ? crop->B : -1, inEffect ? inEffect->L : -1, inEffect ? inEffect->T : -1, inEffect ? inEffect->R : -1, inEffect ? inEffect->B : -1);
+                }
+
+                if (registered && StageStripMotion::ShouldReplace(now.cx, now.cy, last.cx, last.cy, step))
+                {
+                    Place(s, tile);
+                }
+            }
+        }
+
+        if (refresh)
+        {
+            Refresh(); // may restart the cycle (Apply)
+            return;
+        }
+
+        if (StageStripMotion::SettleDone(step, all))
+        {
+            if (!all && step >= StageStripMotion::MaxSteps)
+            {
+                for (const auto& tile : notInOrder)
+                {
+                    gaveUp[tile.window] = tile; // the next Apply does not run a whole cycle again for it
+                }
+            }
+
+            StopSettle();
+        }
     }
 
     void Sync() noexcept
@@ -587,6 +734,7 @@ struct StageStrip::Impl
             pending = false;
             if (leaving)
             {
+                gaveUp.clear();
                 memory.offsets.clear();
             }
         }
@@ -603,6 +751,7 @@ struct StageStrip::Impl
         }
 
         views = std::move(kept);
+        liveSeen.clear(); // the picture is fresh: the word of the main thread counts again
         Refresh();
     }
 
@@ -617,7 +766,13 @@ struct StageStrip::Impl
 
         for (const auto& view : views)
         {
-            projected.push_back(StageStripMotion::Project(view.full, view.offset));
+            auto strip = StageStripMotion::Project(view.full, view.offset);
+            for (auto& tile : strip.tiles)
+            {
+                tile.live = tile.live || liveSeen.contains(tile.window);
+            }
+
+            projected.push_back(std::move(strip));
         }
 
         for (const auto& change : StageStripPlan::DiffStrips(now, projected))

@@ -167,6 +167,38 @@ namespace StageStripMotion
         }
     };
 
+    // Settling: a thumbnail is registered while its window is still being parked (resized, moved) or not painted yet, and the crop
+    // (rcSource) was computed from the size it had then. After a plan change the renderer looks again a few times.
+    constexpr unsigned SettleMillis = 150;
+    constexpr int ForcedStep = 2; // ~300 ms: every thumbnail is applied again whatever it looks like
+    constexpr int MinSteps = 4; // ~600 ms: the shortest a settle cycle runs (a slow app resizes late)
+    constexpr int MaxSteps = 14; // ~2 s: the longest
+
+    // Whether a tile is applied again at this step: forced, or the source size is unknown, or it is not the size the last crop was
+    // computed from.
+    constexpr bool ShouldReplace(int width, int height, int lastWidth, int lastHeight, int step)
+    {
+        return step == ForcedStep || width <= 0 || height <= 0 || width != lastWidth || height != lastHeight;
+    }
+
+    // Whether a tile is in order: registered, live, with a known source size that did not change since the last look
+    constexpr bool TileSettled(bool registered, bool live, int width, int height, int lastWidth, int lastHeight)
+    {
+        return registered && live && width > 0 && height > 0 && width == lastWidth && height == lastHeight;
+    }
+
+    // A tile that is not in order is logged at the first look, at the forced step and at the last one only
+    constexpr bool ShouldLogStep(int step)
+    {
+        return step == 1 || step == ForcedStep || step == MaxSteps;
+    }
+
+    // The cycle stops when everything is settled (after the minimum) or at the maximum: no idle polling
+    constexpr bool SettleDone(int step, bool allSettled)
+    {
+        return step >= MaxSteps || (allSettled && step >= MinSteps);
+    }
+
     // The corner radius a tile can take
     inline int ClampRadius(int radius, int width, int height)
     {

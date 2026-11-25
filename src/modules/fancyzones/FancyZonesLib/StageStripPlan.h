@@ -67,6 +67,19 @@ namespace StageStripPlan
         return LRect(l, t, width - r, height - b);
     }
 
+    // The crop to apply for a source of this size, or nothing when the size is not known (zero or failed query): then no rcSource is
+    // sent at all (never an invalid one), so DWM keeps the one it has (the whole window for a thumbnail that never had one). A known
+    // size always gives a valid crop (the whole source where the insets would leave nothing), which replaces any older rcSource.
+    inline std::optional<LRect> CropFor(int width, int height, const std::array<int, 4>& insets)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            return std::nullopt;
+        }
+
+        return SourceCrop(width, height, insets);
+    }
+
     // A strip over a window that is maximized or fills its monitor would cover its caption buttons and scroll bars, and a click on them
     // would hit a tile: the strip is not shown while a window of the stage is.
     inline bool CoversMonitor(const LRect& window, const LRect& monitor)

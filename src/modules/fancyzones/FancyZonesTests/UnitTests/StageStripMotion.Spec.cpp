@@ -212,6 +212,60 @@ namespace StageStripMotionUnitTests
             Assert::AreEqual(size_t{ 31 }, StageConfig::OverCapacity(many, cap).size());
         }
 
+        TEST_METHOD(CropIsNotSentWhenTheSourceSizeIsUnknown)
+        {
+            const std::array<int, 4> insets{ 7, 0, 7, 7 };
+            Assert::IsFalse(StageStripPlan::CropFor(0, 0, insets).has_value(), L"query failed or zero: no rcSource is sent (DWM keeps the last one)");
+            Assert::IsFalse(StageStripPlan::CropFor(500, 0, insets).has_value());
+            Assert::IsFalse(StageStripPlan::CropFor(-1, 300, insets).has_value());
+            const auto crop = StageStripPlan::CropFor(1000, 600, insets);
+            Assert::IsTrue(crop.has_value() && crop->Same(LRect(7, 0, 993, 593)));
+            Assert::IsTrue(StageStripPlan::CropFor(10, 10, { 5, 0, 5, 0 })->Same(LRect(0, 0, 10, 10)), L"known size, insets that leave nothing: the whole source as a valid rect");
+            Assert::IsTrue(StageStripPlan::CropFor(300, 200, { 0, 0, 0, 0 })->Same(LRect(0, 0, 300, 200)), L"a valid crop always replaces an older rcSource");
+        }
+
+        TEST_METHOD(SettleReappliesWhenTheSourceChangedOrIsUnknownOrForced)
+        {
+            Assert::IsFalse(ShouldReplace(800, 600, 800, 600, 1), L"same size, not the forced step");
+            Assert::IsTrue(ShouldReplace(800, 600, 1920, 1040, 1), L"the window was resized after the crop was computed");
+            Assert::IsTrue(ShouldReplace(0, 0, 800, 600, 1), L"source size unknown");
+            Assert::IsTrue(ShouldReplace(800, 600, 0, 0, 3), L"never applied with a known size");
+            Assert::IsTrue(ShouldReplace(800, 600, 800, 600, ForcedStep), L"forced re-apply once the windows have settled");
+        }
+
+        TEST_METHOD(TileSettledNeedsRegistrationLivenessAndAStableSize)
+        {
+            Assert::IsTrue(TileSettled(true, true, 800, 600, 800, 600));
+            Assert::IsFalse(TileSettled(false, true, 800, 600, 800, 600), L"no thumbnail");
+            Assert::IsFalse(TileSettled(true, false, 800, 600, 800, 600), L"not live");
+            Assert::IsFalse(TileSettled(true, true, 0, 0, 0, 0), L"empty source");
+            Assert::IsFalse(TileSettled(true, true, 800, 600, 700, 600), L"size changed since the last look");
+        }
+
+        TEST_METHOD(SettleLogVolumeIsBounded)
+        {
+            int logged = 0;
+            for (int step = 1; step <= MaxSteps; step++)
+            {
+                logged += ShouldLogStep(step) ? 1 : 0;
+            }
+
+            Assert::AreEqual(3, logged, L"first look, forced step, last step");
+            Assert::IsTrue(ShouldLogStep(1) && ShouldLogStep(ForcedStep) && ShouldLogStep(MaxSteps));
+            Assert::IsFalse(ShouldLogStep(3));
+        }
+
+        TEST_METHOD(SettleCycleIsBounded)
+        {
+            Assert::IsFalse(SettleDone(1, true), L"runs the minimum even when all is in order");
+            Assert::IsFalse(SettleDone(MinSteps - 1, true));
+            Assert::IsTrue(SettleDone(MinSteps, true), L"settled: the timer stops, no idle polling");
+            Assert::IsFalse(SettleDone(MinSteps, false), L"something is still off: keep looking");
+            Assert::IsTrue(SettleDone(MaxSteps, false), L"gives up after about two seconds");
+            Assert::IsTrue(ForcedStep < MinSteps, L"the forced re-apply happens inside the minimum run");
+            Assert::IsTrue(MaxSteps * static_cast<int>(SettleMillis) <= 2500);
+        }
+
         TEST_METHOD(HitTestFollowsTheProjectedTiles)
         {
             const auto shown = Project(Full(6, 3), 2);
