@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -82,22 +83,37 @@ namespace StageStripPlan
         return SourceCrop(width, height, insets);
     }
 
-    // The tiles of a plan are as high as their aspect says (the shape of the master window). A presentation step on the plan after Compute
-    // (the layout engine is not touched) gives them the height that shows the most windows:
-    //  - they fit at the aspect height with room to spare: they share the whole usable height, the first tile's top at the top of the area,
-    //    the last tile's bottom at its bottom, the layout gap between them (the rounding remainder goes to the first tiles, so the last
-    //    one ends exactly at the bottom). The growth is capped at MaxStretch times the aspect height: past that (one or two tiles on a
-    //    tall screen) the group keeps the capped height and is centered vertically;
-    //  - they do not fit: all of them shrink equally, to share the usable height, down to MinTileHeight (so up to about ten windows show
-    //    on a 1350 px strip);
-    //  - not even at MinTileHeight: they keep it and the strip scrolls (the offset is in tiles).
-    // The width of the tiles never changes (the strip's), and a thumbnail is fitted inside its tile keeping its shape. plan.TileH stays
-    // the aspect height (the capacity rule is computed from it and only asks whether one tile fits). Everything that uses the strip
-    // rects (overlay, hit tests, hover, drop to swap, Build and its fit count) takes the plan from here, so they agree.
-    constexpr double MaxStretch = 1.6;
+    // The height of the strip tiles. A presentation step on the plan after Compute (the layout engine is not touched): every tile hugs
+    // its window. Its height is the tile width times the aspect (height / width) of the window's visible frame, the aspect clamped to
+    // AspectMin..AspectMax; a window of unknown size gets the layout's aspect height (plan.TileH). Tiles stack from the top of the
+    // usable area with the layout gap.
+    //  - Too tall together: ALL heights are scaled by one common factor so that they fit, but no tile goes below MinTileHeight (the
+    //    factor stops where the smallest tile reaches it); past that the tiles keep it and the strip scrolls.
+    //  - Shorter together: the leftover is shared out as extra gap between the tiles, so the first top and the last bottom line up with
+    //    the docked windows, at most MaxExtraGapFactor times the layout gap and MaxExtraGapPx per gap; what is left stays unused at
+    //    the bottom (top aligned, not centered). One tile: top aligned at its natural height.
+    // Rounding: when the tiles fill the height, the last bottom is exactly the bottom of the area. The widths never change.
+    // plan.TileH stays the layout's aspect height. Everything that uses the strip rects (overlay, hit tests, hover, drop to swap, Build and
+    // its fit count, the scroll) takes the plan from here, so they agree.
     constexpr int MinTileHeight = 120;
+    constexpr double AspectMin = 0.4;
+    constexpr double AspectMax = 2.5;
+    constexpr int MaxExtraGapFactor = 3;
+    constexpr int MaxExtraGapPx = 40;
+    constexpr double AspectTolerance = 0.05; // a window that resizes re-plans its tile only when its aspect moved by more than this
 
-    inline void StretchTiles(StageLayouts::Plan& plan)
+    // The aspect a tile keeps while the window's aspect stays within the tolerance of it: no re-plan for a few pixels
+    inline double StableAspect(double previous, double current)
+    {
+        if (current <= 0)
+        {
+            return previous;
+        }
+
+        return previous > 0 && std::abs(current - previous) <= previous * AspectTolerance ? previous : current;
+    }
+
+    inline void LayoutTiles(StageLayouts::Plan& plan, const std::function<double(int)>& aspectOf)
     {
         if (!plan.HasStrip || plan.TileH <= 0)
         {
@@ -121,35 +137,68 @@ namespace StageStripPlan
             return;
         }
 
-        const int available = total - (n - 1) * gap;
-        const int minHeight = (std::min)(MinTileHeight, plan.TileH); // a tile that is small anyway is not made smaller
-        int base = 0;
-        int remainder = 0;
-        int top = plan.Area.T;
-        if (available >= n && available / n >= minHeight)
+        std::vector<int> natural;
+        int sum = 0;
+        int smallest = (std::numeric_limits<int>::max)();
+        for (const auto* tile : tiles)
         {
-            base = available / n;
-            remainder = available % n;
-            const int cap = static_cast<int>(std::floor(plan.TileH * MaxStretch));
-            if (base > cap)
-            {
-                base = cap;
-                remainder = 0;
-                top += (total - (n * base + (n - 1) * gap)) / 2;
-            }
-        }
-        else
-        {
-            base = minHeight; // too many even at the minimum: scrolls
+            const double aspect = aspectOf ? aspectOf(tile->Id) : 0.0;
+            const int h = aspect > 0 ? (std::max)(1, static_cast<int>(std::lround(tile->Rect.W() * std::clamp(aspect, AspectMin, AspectMax)))) : plan.TileH;
+            natural.push_back(h);
+            sum += h;
+            smallest = (std::min)(smallest, h);
         }
 
-        int y = top;
+        const int available = total - (n - 1) * gap;
+        std::vector<int> heights = natural;
+        std::vector<int> gaps(static_cast<size_t>(n), gap);
+        if (sum > available)
+        {
+            // one factor for all, not below the smallest tile reaching MinTileHeight (a tile that is smaller than that anyway is not shrunk)
+            const double fit = available > 0 ? static_cast<double>(available) / sum : 0.0;
+            const double floorFactor = (std::min)(1.0, static_cast<double>(MinTileHeight) / smallest);
+            const double factor = (std::max)(fit, floorFactor);
+            int used = 0;
+            for (int i = 0; i < n; i++)
+            {
+                heights[static_cast<size_t>(i)] = (std::max)(1, static_cast<int>(std::floor(natural[static_cast<size_t>(i)] * factor + 1e-9)));
+                used += heights[static_cast<size_t>(i)];
+            }
+
+            if (factor == fit && available > used)
+            {
+                for (int i = 0; used < available; i = (i + 1) % n, used++)
+                {
+                    heights[static_cast<size_t>(i)]++; // the rounding remainder: the last bottom is exactly the bottom
+                }
+            }
+        }
+        else if (n > 1 && sum < available)
+        {
+            const int leftover = available - sum;
+            const int cap = (std::min)(MaxExtraGapFactor * gap, MaxExtraGapPx);
+            const int share = leftover / (n - 1);
+            const int extra = (std::min)(share, cap);
+            for (int i = 0; i < n - 1; i++)
+            {
+                gaps[static_cast<size_t>(i)] += extra;
+            }
+
+            if (share <= cap)
+            {
+                for (int i = 0; i < leftover - extra * (n - 1); i++)
+                {
+                    gaps[static_cast<size_t>(i)]++; // the remainder of the division: the last bottom is exactly the bottom
+                }
+            }
+        }
+
+        int y = plan.Area.T;
         for (int i = 0; i < n; i++)
         {
-            const int h = base + (i < remainder ? 1 : 0);
             auto& rect = tiles[static_cast<size_t>(i)]->Rect;
-            rect = LRect(rect.L, y, rect.R, y + h);
-            y += h + gap;
+            rect = LRect(rect.L, y, rect.R, y + heights[static_cast<size_t>(i)]);
+            y += heights[static_cast<size_t>(i)] + gaps[static_cast<size_t>(i)];
         }
     }
 

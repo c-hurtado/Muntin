@@ -424,9 +424,8 @@ struct StageStrip::Impl
         {
             if (view.full.key == s.strip.key)
             {
-                const int total = static_cast<int>(view.full.tiles.size());
                 const int steps = StageStripMotion::WheelSteps(s.wheel, delta);
-                const int offset = StageStripMotion::ClampOffset(view.offset + steps, total, view.full.fit);
+                const int offset = StageStripMotion::ClampOffsetFor(view.full, view.offset + steps);
                 if (offset != view.offset)
                 {
                     view.offset = offset;
@@ -770,7 +769,7 @@ struct StageStrip::Impl
         {
             View view;
             // Remembered per monitor and layout (also while the strip was hidden); windows gone: back in range
-            view.offset = memory.Recall(strip.key, strip.layout, static_cast<int>(strip.tiles.size()), strip.fit);
+            view.offset = StageStripMotion::ClampOffsetFor(strip, memory.Raw(strip.key, strip.layout));
             memory.Remember(strip.key, strip.layout, view.offset);
             view.full = std::move(strip);
             kept.push_back(std::move(view));

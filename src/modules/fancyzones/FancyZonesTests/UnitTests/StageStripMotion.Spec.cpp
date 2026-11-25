@@ -24,6 +24,7 @@ namespace
         s.key = L"m";
         s.area = LRect(0, 0, 100, 1000);
         s.fit = fit;
+        s.clip = LRect(0, 0, 100, (std::max)(fit, 1) * 60 - 10); // the fit slots (50 high, pitch 60)
         for (int i = 0; i < total; i++)
         {
             s.tiles.push_back({ std::uintptr_t{ 100 } + static_cast<std::uintptr_t>(i), LRect(10, i * 60, 90, i * 60 + 50), true, {} });

@@ -80,41 +80,42 @@ namespace StageStripMotion
         return rr > l && b > t ? LRect(l, t, rr, b) : LRect();
     }
 
-    // The distance from one tile to the next (top to top): the tiles of a strip are laid one under the other
-    inline int Pitch(const Strip& full)
+    // The first tile that shows when the list is scrolled all the way down: the smallest offset from which every tile that is left
+    // fits in the strip. With tiles of different heights that is not "total minus fit". No clip known: the count rule.
+    inline int MaxOffsetFor(const Strip& full)
     {
-        if (full.tiles.size() >= 2)
+        const int total = static_cast<int>(full.tiles.size());
+        if (total == 0)
         {
-            return full.tiles[1].rect.T - full.tiles[0].rect.T;
+            return 0;
         }
 
-        return full.tiles.empty() ? 0 : full.tiles[0].rect.H();
+        if (full.clip.H() <= 0)
+        {
+            return MaxOffset(total, full.fit);
+        }
+
+        const int bottom = full.tiles.back().rect.B;
+        for (int k = 0; k < total; k++)
+        {
+            if (bottom - full.tiles[static_cast<size_t>(k)].rect.T <= full.clip.H())
+            {
+                return k;
+            }
+        }
+
+        return total - 1;
     }
 
-    // The slot of a position in the list, counted from the first one that shows: the fit real slots, then the same distance on either
-    // side (where a tile waits just outside the strip, or has just left it)
-    inline LRect SlotRect(const Strip& full, int position)
+    inline int ClampOffsetFor(const Strip& full, int offset)
     {
-        if (full.tiles.empty())
-        {
-            return LRect();
-        }
-
-        const int fit = (std::max)(full.fit, 1);
-        if (position >= 0 && position < fit && static_cast<size_t>(position) < full.tiles.size())
-        {
-            return full.tiles[static_cast<size_t>(position)].rect;
-        }
-
-        const auto& edge = position < 0 ? full.tiles.front().rect : full.tiles[(std::min)(static_cast<size_t>(fit), full.tiles.size()) - 1].rect;
-        const int steps = position < 0 ? position : position - (fit - 1);
-        const int dy = steps * Pitch(full);
-        return LRect(edge.L, edge.T + dy, edge.R, edge.B + dy);
+        return std::clamp(offset, 0, MaxOffsetFor(full));
     }
 
-    // What the strip draws for a scroll offset: the `fit` tiles that show, and `margin` more on each side, each in the slot of its
-    // position. A scroll moves every tile one slot (the same distance and the same ease, so the list slides as one); the tiles outside
-    // the strip wait just beyond its edges and come in from there; the region clips them (ClipRect).
+    // What the strip draws for a scroll offset (the index of the first tile at the top). A scroll moves the whole list up by the height
+    // of the tiles before the offset (each tile's own height plus the gap), so tiles of any height keep their places relative to each
+    // other and slide as one. The tiles that meet the clip show; `margin` more wait on each side, just outside the strip, and come in
+    // from there (the clip cuts them: ClipRect). No clip known: the `fit` tiles from the offset.
     inline Strip ProjectSlide(const Strip& full, int offset, int margin)
     {
         Strip shown;
@@ -124,13 +125,35 @@ namespace StageStripMotion
         shown.fit = full.fit;
         shown.layout = full.layout;
         const int total = static_cast<int>(full.tiles.size());
-        const int first = ClampOffset(offset, total, full.fit);
-        const int from = (std::max)(0, first - (std::max)(margin, 0));
-        const int to = (std::min)(total, first + (std::max)(full.fit, 0) + (std::max)(margin, 0));
+        if (total == 0)
+        {
+            return shown;
+        }
+
+        const int first = ClampOffsetFor(full, offset);
+        const int dy = full.tiles[static_cast<size_t>(first)].rect.T - full.tiles.front().rect.T;
+        const auto moved = [&](int i) {
+            auto r = full.tiles[static_cast<size_t>(i)].rect;
+            return LRect(r.L, r.T - dy, r.R, r.B - dy);
+        };
+
+        int visibleFrom = first, visibleTo = first - 1;
+        for (int i = 0; i < total; i++)
+        {
+            const bool meets = full.clip.H() > 0 ? ClipRect(moved(i), full.clip).H() > 0 : (i >= first && i < first + (std::max)(full.fit, 1));
+            if (meets)
+            {
+                visibleFrom = (std::min)(visibleFrom, i);
+                visibleTo = (std::max)(visibleTo, i);
+            }
+        }
+
+        const int from = (std::max)(0, visibleFrom - (std::max)(margin, 0));
+        const int to = (std::min)(total, visibleTo + 1 + (std::max)(margin, 0));
         for (int i = from; i < to; i++)
         {
             auto tile = full.tiles[static_cast<size_t>(i)];
-            tile.rect = SlotRect(full, i - first);
+            tile.rect = moved(i);
             shown.tiles.push_back(tile);
         }
 
@@ -236,6 +259,13 @@ namespace StageStripMotion
         {
             const auto it = offsets.find(KeyOf(monitor, layout));
             return ClampOffset(it == offsets.end() ? 0 : it->second, total, fit);
+        }
+
+        // What was remembered, not clamped (the caller clamps it to the strip it has now)
+        int Raw(const std::wstring& monitor, const std::string& layout) const
+        {
+            const auto it = offsets.find(KeyOf(monitor, layout));
+            return it == offsets.end() ? 0 : it->second;
         }
 
         void Remember(const std::wstring& monitor, const std::string& layout, int offset)

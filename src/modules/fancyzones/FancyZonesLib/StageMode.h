@@ -94,6 +94,7 @@ private:
         int minW{}, minH{}; // smallest visible size, 0 = none known
         int learned{}; // how often a minimum was learned from how the window landed
         bool parked{}; // sits where Park put it
+        double tileAspect{}; // height over width of the window as its strip tile was last planned (kept while it moves less than 5%)
         bool fullscreen{}; // went fullscreen (no title bar, covers the monitor): the stage leaves it alone until it is a normal window again
         bool needMeasure{}; // was maximized: insets and minimum size are taken once it is restored
         ULONGLONG unmaximizeUntil{}; // deadline for it to leave the maximized state

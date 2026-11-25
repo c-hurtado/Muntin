@@ -800,7 +800,26 @@ StageLayouts::Plan StageMode::ComputePlan(MonitorStage& stage)
     input.Spacing = CurrentSpacing();
     input.Wins = std::move(wins);
     auto plan = stage.layout->Compute(input);
-    StageStripPlan::StretchTiles(plan); // the strip tiles share the height of the docked windows when they fit
+    // Each strip tile hugs its window (the height of the window's visible frame over its width); the aspect is kept while it stays within 5%
+    StageStripPlan::LayoutTiles(plan, [&](int id) {
+        const auto it = m_windows.find(id);
+        RECT rect{};
+        if (it == m_windows.end() || !IsWindow(it->second.window) || !GetWindowRect(it->second.window, &rect))
+        {
+            return 0.0;
+        }
+
+        auto& m = it->second;
+        const int w = rect.right - rect.left - m.insets.L - m.insets.R;
+        const int h = rect.bottom - rect.top - m.insets.T - m.insets.B;
+        if (w <= 0 || h <= 0)
+        {
+            return m.tileAspect;
+        }
+
+        m.tileAspect = StageStripPlan::StableAspect(m.tileAspect, static_cast<double>(h) / w);
+        return m.tileAspect;
+    });
     return plan;
 }
 
