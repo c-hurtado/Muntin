@@ -907,6 +907,15 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
     }
 
     bool guarded = false;
+    // The moves of the windows that land docked wait until the loop is done: the ones that glide are held first
+    struct DockedMove
+    {
+        Managed* window{};
+        Rect outer;
+        bool wasParked{};
+        StageMotion::Candidate facts;
+    };
+    std::vector<DockedMove> dockedMoves;
     for (const auto& item : plan.Items)
     {
         const auto found = m_windows.find(item.Id);
@@ -955,12 +964,19 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         if (item.Role == StageLayouts::Role::Main || item.Role == StageLayouts::Role::Docked)
         {
             m.guarded = false;
-            MoveTo(m.window, StagePark::OuterRect(item.Rect, m.insets, stage.monitor.rect, monitors), false, stage.monitor.handle);
-            if (m.parked)
-            {
-                SetWindowPos(m.window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS); // Back from behind everything
-                m.parked = false;
-            }
+            DockedMove move;
+            move.window = &m;
+            move.outer = StagePark::OuterRect(item.Rect, m.insets, stage.monitor.rect, monitors);
+            move.wasParked = m.parked;
+            RECT now{};
+            move.facts.landsDocked = true;
+            move.facts.wasParked = m.parked;
+            move.facts.moves = !GetWindowRect(m.window, &now) || !ToRect(now).Same(move.outer);
+            move.facts.cloaked = IsCloaked(m.window);
+            move.facts.fullscreen = m.fullscreen;
+            move.facts.changesMonitor = MonitorFromWindow(m.window, MONITOR_DEFAULTTONEAREST) != stage.monitor.handle;
+            move.facts.visible = IsWindowVisible(m.window) != FALSE;
+            dockedMoves.push_back(move);
         }
         else if (dialogs.contains(m.window))
         {
@@ -983,6 +999,46 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
             }
 
             m.parked = true;
+        }
+    }
+
+    if (!dockedMoves.empty())
+    {
+        std::vector<StageMotion::Candidate> facts;
+        for (const auto& move : dockedMoves)
+        {
+            facts.push_back(move.facts);
+        }
+
+        StageMotion::Context context;
+        context.setting = FancyZonesSettings::settings().dockAnimation;
+        context.dragging = m_drag.has_value();
+        context.areaChanged = m_areaChanging;
+        std::vector<HWND> gliders;
+        if (m_motion.hold && m_motion.release)
+        {
+            for (const size_t i : StageMotion::Gliders(context, facts))
+            {
+                gliders.push_back(dockedMoves[i].window->window);
+            }
+        }
+
+        StageMotion::ScopeGuard releaseGuard; // minimized and maximized windows never get here (the loop above skipped them)
+        if (!gliders.empty())
+        {
+            m_motion.hold(gliders); // Not before: the sprites start from where the windows are now
+            releaseGuard.onExit = [&] { m_motion.release(true); };
+        }
+
+        for (const auto& move : dockedMoves)
+        {
+            auto& m = *move.window;
+            MoveTo(m.window, move.outer, false, stage.monitor.handle);
+            if (move.wasParked)
+            {
+                SetWindowPos(m.window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS); // Back from behind everything
+                m.parked = false;
+            }
         }
     }
 
@@ -2238,7 +2294,7 @@ void StageMode::Enter() noexcept
     }
 }
 
-void StageMode::Leave() noexcept
+void StageMode::Leave(bool animate) noexcept
 {
     try
     {
@@ -2274,7 +2330,44 @@ void StageMode::Leave() noexcept
 
         // Everything goes back; what can't (not responding) stays in the file
         m_orphanTries = 0;
-        m_orphans = RestoreEntries(AllOriginals());
+        std::vector<HWND> gliders;
+        StageMotion::Context context;
+        context.setting = FancyZonesSettings::settings().dockAnimation;
+        context.shuttingDown = !animate;
+        if (m_motion.hold && m_motion.release && StageMotion::ShouldGlideLeave(context))
+        {
+            for (const auto& [_, m] : m_windows)
+            {
+                RECT now{};
+                const RECT back{ m.original.rect.L, m.original.rect.T, m.original.rect.R, m.original.rect.B };
+                StageMotion::Candidate facts;
+                facts.landsDocked = !m.parked; // a parked window stays out of sight: it does not glide
+                facts.wasParked = m.parked;
+                facts.moves = GetWindowRect(m.window, &now) && !ToRect(now).Same(m.original.rect);
+                facts.minimized = IsIconic(m.window) != FALSE;
+                facts.cloaked = IsCloaked(m.window);
+                facts.maximized = IsZoomed(m.window) != FALSE || m.original.showCmd != SW_SHOWNORMAL; // it goes back by its placement, not by its rect
+                facts.fullscreen = m.fullscreen;
+                facts.changesMonitor = MonitorFromRect(&back, MONITOR_DEFAULTTONEAREST) != MonitorFromWindow(m.window, MONITOR_DEFAULTTONEAREST);
+                facts.visible = IsWindowVisible(m.window) != FALSE;
+                if (StageMotion::ShouldGlide(context, facts))
+                {
+                    gliders.push_back(m.window);
+                }
+            }
+        }
+
+        {
+            StageMotion::ScopeGuard releaseGuard;
+            if (!gliders.empty())
+            {
+                m_motion.hold(gliders);
+                releaseGuard.onExit = [&] { m_motion.release(true); };
+            }
+
+            m_orphans = RestoreEntries(AllOriginals());
+        }
+
         m_windows.clear();
         m_stages.clear();
         WriteState(); // Deletes the file when nothing is left
@@ -2388,6 +2481,8 @@ void StageMode::OnTimer() noexcept
                 m.grace = now + GraceMillis; // The moves below are ours: VerifyLanding must not take their transit for a minimum size
             }
 
+            m_areaChanging = true; // Every relayout (display change, unmaximize wait, monitor key retry) lands without a glide
+            const StageMotion::ScopeGuard areaGuard{ [this] { m_areaChanging = false; } };
             LandAll();
             m_rehomeAt = now + TickMillis; // Windows of a monitor that went away or came: see where each one is
             m_scanAt = now + TickMillis; // Windows that were cut or waiting for a monitor are taken again (the cut list was cleared)

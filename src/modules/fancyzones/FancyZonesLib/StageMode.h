@@ -16,6 +16,7 @@
 #include <FancyZonesLib/StageKeys.h>
 #include <FancyZonesLib/StageLayouts.h>
 #include <FancyZonesLib/StageMonitors.h>
+#include <FancyZonesLib/StageMotion.h>
 #include <FancyZonesLib/StageMouse.h>
 #include <FancyZonesLib/StagePark.h>
 #include <FancyZonesLib/StageState.h>
@@ -45,7 +46,8 @@ public:
     // Takes the windows. First puts back what an earlier run that died left in the state file.
     void Enter() noexcept;
     // Puts every window back where it was and deletes the state file
-    void Leave() noexcept;
+    // animate: a user's switch out of stage mode (the windows glide back); false for a shutdown, a watchdog and the destructor
+    void Leave(bool animate = false) noexcept;
     bool Active() const noexcept { return m_active; }
 
     // Window events (FancyZones' window procedure, main thread)
@@ -69,6 +71,14 @@ public:
     void KeyAction(StageKeys::Action action, HWND target) noexcept;
 
     void DisplayChanged() noexcept;
+    // The glide of the windows (DockMotion, owned by FancyZones): hold before windows move, release after. Both empty: no glide.
+    struct MotionHooks
+    {
+        std::function<void(const std::vector<HWND>&)> hold;
+        std::function<void(bool)> release;
+    };
+    void SetMotion(MotionHooks hooks) noexcept { m_motion = std::move(hooks); }
+
     void SettingsChanged() noexcept; // gap, margins, layout, cut or rows changed in settings.json
 
     void OnTimer() noexcept;
@@ -197,6 +207,8 @@ private:
     UINT_PTR m_timerId{};
     UINT_PTR m_dragTimerId{};
     std::optional<Drag> m_drag;
+    MotionHooks m_motion;
+    bool m_areaChanging{}; // set during the relayout timer's LandAll: it also suppresses glides for the unmaximize-wait and monitor-key-retry relayouts
     bool m_active{};
     int m_nextId{ 1 };
     StageConfig::Values m_values; // the global values: layout choice, and the default cut and rows of a monitor without an entry

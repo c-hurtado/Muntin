@@ -52,6 +52,7 @@
     <ClCompile Include="StageKeys.Spec.cpp" />
     <ClCompile Include="StageMouse.Spec.cpp" />
     <ClCompile Include="StageStripPlan.Spec.cpp" />
+    <ClCompile Include="StageMotion.Spec.cpp" />
     <ClCompile Include="StageStripMotion.Spec.cpp" />
     <ClCompile Include="StageStripStretch.Spec.cpp" />
     <ClCompile Include="StagePhase6.Spec.cpp" />

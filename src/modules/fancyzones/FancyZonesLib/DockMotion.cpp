@@ -61,7 +61,7 @@ namespace
     {
         int cloaked{};
         DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
-        return IsWindowVisible(window) && !IsIconic(window) && !cloaked && !Arrange::HandsOff(window);
+        return IsWindowVisible(window) && !IsIconic(window) && !cloaked && !Arrange::HandsOffForMotion(window);
     }
 
     std::array<double, 4> PlaceOf(const RECT& rect) noexcept

@@ -107,6 +107,18 @@ namespace Arrange
         return Combine(false, IsStage(), IsStage() && Stage::IsHeld(window), marked);
     }
 
+    // As HandsOff, but a window Stage itself holds still counts as one to move: the glide of a stage move is Muntin's own
+    inline bool HandsOffForMotion(HWND window) noexcept
+    {
+        if (DesktopScroll::IsParked(window))
+        {
+            return true;
+        }
+
+        const HANDLE property = window ? GetPropW(window, HandsOffProperty) : nullptr;
+        return property && PropertyHandsOff(property, ProcessIsAlive);
+    }
+
     // "0.5,0.3" style list of thousandths <-> shares. Anything that doesn't parse gives an empty list (equal heights).
     inline std::vector<double> ParseRows(const std::wstring& text)
     {

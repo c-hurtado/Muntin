@@ -664,6 +664,13 @@ FancyZones::Run() noexcept
     }
 
     m_dockMotion = std::make_unique<DockMotion>(m_hinstance);
+    if (StageMotion::Enabled)
+    {
+        // m_stageMode is reset before m_dockMotion (Destroy), so the pointer outlives the hooks
+        m_stageMode->SetMotion({ [motion = m_dockMotion.get()](const std::vector<HWND>& windows) { motion->Hold(windows); },
+                                 [motion = m_dockMotion.get()](bool moved) { motion->Release(moved); } });
+    }
+
     m_desktopScroll = std::make_unique<DesktopScroll>(m_hinstance, [window = m_window](HMONITOR monitor, int page) {
         PostMessageW(window, WM_PRIV_DESKTOP_SCROLL, reinterpret_cast<WPARAM>(monitor), page);
     });
@@ -2166,7 +2173,7 @@ void FancyZones::SettingsUpdate(SettingId id)
             KillTimer(m_window, StageEnterTimerId);
             if (m_stageMode)
             {
-                m_stageMode->Leave(); // Every window goes back where it was
+                m_stageMode->Leave(true); // Every window goes back where it was
             }
 
             m_stageKeyGate.Reset();
