@@ -17,6 +17,8 @@
 #include <FancyZonesLib/MonitorUtils.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/StageDpi.h>
+#include <FancyZonesLib/StageStrip.h>
+#include <FancyZonesLib/FancyZonesWinHookEventIDs.h>
 #include <FancyZonesLib/SettingsConstants.h>
 #include <FancyZonesLib/WindowUtils.h>
 
@@ -683,6 +685,12 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
 {
     if (stage.order.empty())
     {
+        stage.strip.reset();
+        if (!dockedOnly)
+        {
+            SyncStrip();
+        }
+
         return;
     }
 
@@ -696,6 +704,27 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
     }
 
     const auto plan = ComputePlan(stage);
+    if (!dockedOnly)
+    {
+        stage.strip = StageStripPlan::Build(
+            StageStripPlan::KeyOf(stage.monitor.rect), plan,
+            [&](int id) {
+                StageStripPlan::Source source;
+                const auto it = m_windows.find(id);
+                if (it != m_windows.end())
+                {
+                    const auto& m = it->second;
+                    source.window = reinterpret_cast<std::uintptr_t>(m.window);
+                    // A minimized or cloaked window has a blank thumbnail (a minimized one is released from the stage anyway)
+                    source.live = IsWindow(m.window) && IsWindowVisible(m.window) && !IsIconic(m.window) && !IsCloaked(m.window);
+                    source.insets = { m.insets.L, m.insets.T, m.insets.R, m.insets.B };
+                }
+
+                return source;
+            });
+        stage.stripHidden = StripCovered(stage);
+    }
+
     const auto monitors = MonitorRects();
     bool waiting = false;
     std::vector<int> stuck;
@@ -788,6 +817,7 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         return; // A drag preview: no timers, no verification; the drop lands the whole stage
     }
 
+    SyncStrip();
     const auto now = GetTickCount64();
     if (waiting)
     {
@@ -801,6 +831,110 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
     }
 
     Schedule(TickMillis);
+}
+
+// The strips of every stage as the last Land planned them. Never waits for the renderer thread.
+void StageMode::SyncStrip()
+{
+    if (!m_strip)
+    {
+        return;
+    }
+
+    std::vector<StageStripPlan::Strip> strips;
+    for (const auto& stage : m_stages)
+    {
+        if (stage.strip && !stage.stripHidden)
+        {
+            strips.push_back(*stage.strip);
+        }
+    }
+
+    m_strip->Publish(std::move(strips));
+}
+
+// A maximized or monitor-filling window of the stage: its strip is not shown (the tiles would sit over its caption buttons)
+bool StageMode::StripCovered(const MonitorStage& stage) const
+{
+    bool zoomed = false, covers = false;
+    for (const int id : stage.order)
+    {
+        const auto it = m_windows.find(id);
+        if (it == m_windows.end() || !IsWindow(it->second.window) || !IsWindowVisible(it->second.window) || IsIconic(it->second.window))
+        {
+            continue;
+        }
+
+        RECT rect{};
+        zoomed = zoomed || IsZoomed(it->second.window);
+        covers = covers || (GetWindowRect(it->second.window, &rect) && StageStripPlan::CoversMonitor(ToRect(rect), stage.monitor.rect));
+    }
+
+    return StageStripPlan::Suppressed(zoomed, covers);
+}
+
+// The slow poll: a window maximized or made fullscreen raises no event the stage hears
+void StageMode::RefreshStripCover()
+{
+    bool changed = false;
+    for (auto& stage : m_stages)
+    {
+        const bool hidden = stage.strip && StripCovered(stage);
+        if (hidden != stage.stripHidden)
+        {
+            stage.stripHidden = hidden;
+            changed = true;
+        }
+    }
+
+    if (changed)
+    {
+        SyncStrip();
+    }
+}
+
+// A tile of the strip was clicked: that window takes the main (pair: left) slot, as the promote key does. Docked windows and windows
+// that are not tiles are left alone.
+void StageMode::StripClick(HWND window) noexcept
+{
+    try
+    {
+        StageDpi::Scope dpi;
+        if (!m_active || m_drag)
+        {
+            return;
+        }
+
+        auto* m = Find(window);
+        MonitorStage* stage = m ? StageOfId(m->id) : nullptr;
+        if (!m || !stage || !IsWindow(m->window) || IsIconic(m->window))
+        {
+            return;
+        }
+
+        const auto plan = ComputePlan(*stage);
+        const auto item = std::find_if(plan.Items.begin(), plan.Items.end(), [&](const StageLayouts::PlanItem& i) { return i.Id == m->id; });
+        if (item == plan.Items.end() || item->Role != StageLayouts::Role::StripTile || !stage->layout->PromoteHidden(stage->order, m->id))
+        {
+            return;
+        }
+
+        Logger::info(L"Stage: strip click hwnd={:x} class={}", reinterpret_cast<uintptr_t>(m->window), ClassOf(m->window));
+        Land(*stage);
+        if (m->window != GetForegroundWindow())
+        {
+            FancyZonesWindowUtils::SwitchToWindow(m->window);
+        }
+    }
+    catch (...)
+    {
+        Logger::error(L"Stage: strip click failed");
+    }
+}
+
+int StageMode::Capacity(const MonitorStage& stage) const
+{
+    return StageConfig::CapacityOf(*stage.layout, stage.monitor.work, CurrentSpacing());
 }
 
 void StageMode::LandAll()
@@ -905,7 +1039,7 @@ const wchar_t* StageMode::Consider(HWND window, MonitorStage*& stage, std::optio
         {
             reason = L"its state could not be read";
         }
-        else if (!StageConfig::HasRoom(stage->order.size(), StageConfig::CapacityOf(*stage->layout)))
+        else if (!StageConfig::HasRoom(stage->order.size(), Capacity(*stage)))
         {
             reason = L"no room: the stage of its monitor is full"; // Left alone, not held, not parked. Scan takes it once there is room.
         }
@@ -1105,7 +1239,7 @@ void StageMode::RehomeScan()
             facts.grace = m.grace;
             facts.destinationKnown = to != nullptr;
             facts.sameStage = to == &from;
-            facts.destinationHasRoom = to && StageConfig::HasRoom(to->order.size(), StageConfig::CapacityOf(*to->layout));
+            facts.destinationHasRoom = to && StageConfig::HasRoom(to->order.size(), Capacity(*to));
             if (facts.usable && to && !facts.sameStage && (facts.mouseDown || now < m.grace))
             {
                 // Held back: tried again as soon as the drag is over or the grace has run out, never dropped
@@ -1622,6 +1756,11 @@ void StageMode::Enter() noexcept
 
         m_active = true;
         PublishHeld();
+        if (!m_strip && m_timerWindow && WM_PRIV_STAGE_STRIP_CLICK)
+        {
+            m_strip = std::make_unique<StageStrip>(m_timerWindow, WM_PRIV_STAGE_STRIP_CLICK);
+        }
+
         for (auto& [id, stage] : taken)
         {
             Prepare(m_windows.at(id), stage->monitor.work);
@@ -1652,6 +1791,11 @@ void StageMode::Leave() noexcept
         }
 
         m_active = false;
+        if (m_strip)
+        {
+            m_strip->Publish({}, true); // The tiles are gone before the windows come back
+        }
+
         m_keyTracker.Reset();
         StopDrag(false);
         if (m_timerWindow)
@@ -1769,10 +1913,11 @@ void StageMode::OnTimer() noexcept
             ProcessPending();
         }
 
-        if (m_stages.size() > 1 && now >= m_pollAt)
+        if (!m_stages.empty() && now >= m_pollAt)
         {
             m_pollAt = now + RehomePollMillis;
-            if (!m_rehomeAt)
+            RefreshStripCover();
+            if (m_stages.size() > 1 && !m_rehomeAt)
             {
                 m_rehomeAt = now; // Cheap: one monitor lookup per held window
             }
@@ -1831,7 +1976,7 @@ void StageMode::OnTimer() noexcept
             RetryOrphans();
         }
 
-        if (m_active && m_stages.size() > 1 && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt)
+        if (m_active && !m_stages.empty() && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt)
         {
             Schedule(static_cast<UINT>(RehomePollMillis)); // Idle: the slow poll is all that is left
         }
@@ -1927,7 +2072,7 @@ void StageMode::KeyAction(StageKeys::Action action, HWND target) noexcept
             const auto next = StageLayouts::NextLayoutName(StageConfig::Narrow(m_values.layout));
             const std::wstring name(next.begin(), next.end());
             Logger::info(L"Stage: key {}: {}", StageKeys::Name(action), name);
-            SetLayoutName(name); // Saved to settings.json; the master layout runs until the strip is drawn (Phase 4)
+            SetLayoutName(name); // Saved to settings.json
             return;
         }
 
@@ -1958,7 +2103,7 @@ void StageMode::KeyAction(StageKeys::Action action, HWND target) noexcept
             }
 
             auto& destination = m_stages[to];
-            if (!StageConfig::HasRoom(destination.order.size(), StageConfig::CapacityOf(*destination.layout)))
+            if (!StageConfig::HasRoom(destination.order.size(), Capacity(destination)))
             {
                 Logger::info(L"Stage: key {} hwnd={:x}: no room on monitor {}", StageKeys::Name(action), reinterpret_cast<uintptr_t>(m->window), to);
                 return;

@@ -63,6 +63,8 @@
     <ClInclude Include="StageMode.h" />
     <ClInclude Include="StageKeys.h" />
     <ClInclude Include="StageMouse.h" />
+    <ClInclude Include="StageStrip.h" />
+    <ClInclude Include="StageStripPlan.h" />
     <ClInclude Include="StagePark.h" />
     <ClInclude Include="StageState.h" />
     <ClInclude Include="DesktopScroll.h" />
@@ -131,6 +133,7 @@
     <ClCompile Include="JsonHelpers.cpp" />
     <ClCompile Include="DesktopScroll.cpp" />
     <ClCompile Include="StageMode.cpp" />
+    <ClCompile Include="StageStrip.cpp" />
     <ClCompile Include="DockMotion.cpp" />
     <ClCompile Include="Tray.cpp" />
     <ClCompile Include="DockCaptionButtons.cpp" />

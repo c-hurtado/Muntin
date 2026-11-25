@@ -3,6 +3,7 @@
 // Stage mode choices that survive a restart (layout, cuts, master row heights): pure helpers between the settings values and the
 // layout objects. Nothing here reads or writes a file; StageMode saves what Changes() returns.
 
+#include <algorithm>
 #include <limits>
 #include <map>
 #include <optional>
@@ -18,7 +19,7 @@ namespace StageConfig
 {
     struct Values
     {
-        std::wstring layout = L"stage"; // stage, pair or master
+        std::wstring layout = L"master"; // stage, pair or master
         int pairCut = 500; // thousandths, 150 .. 850
         int masterCut = 600;
         std::wstring rows; // master stack height shares, thousandths, comma separated; empty = equal
@@ -148,22 +149,45 @@ namespace StageConfig
         return narrow;
     }
 
-    // Phase 3 draws no strip: only the master layout can show every window it manages, so that is what runs, whatever the
-    // setting says (the setting itself is kept as it is and takes effect once the strip is drawn, Phase 4).
-    inline std::string EffectiveLayoutName(const std::wstring&)
+    // The layout that runs: the saved choice (stage, pair or master); a name nobody knows is the master layout (the behaviour before
+    // the strip existed: nobody gets the strip until they choose it).
+    inline std::string EffectiveLayoutName(const std::wstring& saved)
     {
-        return "master";
+        const auto name = Narrow(saved);
+        const auto& names = StageLayouts::LayoutNames();
+        return std::find(names.begin(), names.end(), name) != names.end() ? name : std::string("master");
     }
 
-    // Windows in the master's stack (the layout allows 1 .. 8). Phase 3 has no strip and no way to bring a hidden window back
-    // (rotate / promote come with Phase 5), so a window beyond what is shown is never taken: it is left alone, not parked.
+    // Windows in the master's stack (the layout allows 1 .. 8). The master layout has no strip: a window beyond what it shows is
+    // never taken (left alone, not parked). The stage and pair layouts show every window beyond their slots as a strip tile.
     constexpr int MasterMaxStack = 8;
 
-    // How many windows one monitor's stage can show: master + stack. A layout with a strip shows every window as a tile.
-    inline int CapacityOf(const StageLayouts::ILayout& layout)
+    // How many windows one monitor's stage can show: master + stack; for a layout with a strip, its docked slots plus the strip tiles that
+    // fit completely inside the usable area (there is no scrolling yet: a window without a tile would have no mouse path back).
+    inline int CapacityOf(const StageLayouts::ILayout& layout, const StageLayouts::LRect& work, const StageLayouts::Spacing& spacing)
     {
         constexpr int many = 1000;
-        return layout.HasStrip(many) ? (std::numeric_limits<int>::max)() : layout.Slots(many);
+        const int slots = layout.Slots(many);
+        if (!layout.HasStrip(many))
+        {
+            return slots;
+        }
+
+        StageLayouts::LayoutInput input;
+        input.Work = work;
+        input.Spacing = spacing;
+        for (int i = 1; i <= slots + 1; i++)
+        {
+            input.Wins.emplace_back(i);
+        }
+
+        const auto plan = layout.Compute(input);
+        if (!plan.HasStrip || plan.TileH <= 0)
+        {
+            return slots;
+        }
+
+        return slots + (std::max)(0, (plan.Area.H() + plan.Gap) / (plan.TileH + plan.Gap));
     }
 
     inline bool HasRoom(size_t managed, int capacity)

@@ -18,6 +18,9 @@
 #include <FancyZonesLib/StageMouse.h>
 #include <FancyZonesLib/StagePark.h>
 #include <FancyZonesLib/StageState.h>
+#include <FancyZonesLib/StageStripPlan.h>
+
+class StageStrip;
 
 // Stage mode runtime (Phase 3: master layout, no strip). Everything runs on the main (window) thread of FancyZones: the events are
 // posted to it, the timer is its own. Muntin takes the eligible windows of each monitor, places the first as master and the next
@@ -61,6 +64,7 @@ public:
     // action; KeyAction runs it. NoteForeground at every foreground change keeps the "last managed foreground".
     HWND KeyTarget() noexcept;
     void NoteForeground(HWND foreground) noexcept; // the window of the foreground event
+    void StripClick(HWND window) noexcept; // a tile of the strip was clicked (posted by the strip renderer)
     void KeyAction(StageKeys::Action action, HWND target) noexcept;
 
     void DisplayChanged() noexcept;
@@ -110,6 +114,8 @@ private:
         StageConfig::Values values; // the layout choice plus this monitor's own cut and rows (the global ones where it has no entry)
         std::vector<int> order; // layout order: master first
         std::unique_ptr<StageLayouts::ILayout> layout;
+        std::optional<StageStripPlan::Strip> strip; // what the last Land planned for the strip renderer
+        bool stripHidden{}; // a maximized or monitor-filling window: the strip is not shown
     };
 
     using Rect = StageLayouts::LRect;
@@ -146,6 +152,10 @@ private:
     // the docked windows only (no parking, no dialog scan, no minimum-size check).
     void Land(MonitorStage& stage, int skipId = 0, bool dockedOnly = false);
     void LandAll();
+    void SyncStrip();
+    bool StripCovered(const MonitorStage& stage) const;
+    void RefreshStripCover();
+    int Capacity(const MonitorStage& stage) const;
     bool Adopt(HWND window);
     const wchar_t* Consider(HWND window, MonitorStage*& stage, std::optional<StageState::Entry>& original);
     void LogDecision(HWND window, const wchar_t* verdict);
@@ -170,6 +180,7 @@ private:
 
     StageKeys::ForegroundFacts ForegroundOf(HWND foreground);
 
+    std::unique_ptr<StageStrip> m_strip; // the thumbnails of the parked windows (own thread); created at the first Enter
     StageKeys::Tracker m_keyTracker;
     HWND m_timerWindow{};
     UINT_PTR m_timerId{};

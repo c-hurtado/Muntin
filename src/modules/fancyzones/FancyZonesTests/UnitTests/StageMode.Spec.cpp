@@ -409,9 +409,19 @@ namespace FancyZonesUnitTests
             values.rows = L"garbage";
             Assert::IsTrue(StageConfig::MakeLayout(values)->Rows().empty(), L"bad rows: equal heights");
 
-            // Phase 3 draws no strip: whatever is configured, the layout that runs is the one without one
-            values.layout = L"stage";
-            Assert::AreEqual(std::string("master"), StageConfig::MakeLayout(values)->Name());
+            // The saved choice is the layout that runs; a name nobody knows is the stage layout
+            for (const auto* name : { L"stage", L"pair", L"master" })
+            {
+                values.layout = name;
+                Assert::AreEqual(StageConfig::Narrow(name), StageConfig::MakeLayout(values)->Name());
+                Assert::AreEqual(StageConfig::Narrow(name), StageConfig::EffectiveLayoutName(name));
+            }
+
+            values.layout = L"nope";
+            Assert::AreEqual(std::string("master"), StageConfig::MakeLayout(values)->Name(), L"unknown: master, nobody gets the strip unasked");
+            Assert::AreEqual(std::string("master"), StageConfig::EffectiveLayoutName(L""));
+            Assert::AreEqual(std::wstring(L"master"), StageConfig::Values{}.layout, L"the default");
+            Assert::AreEqual(std::wstring(L"master"), Settings{}.stageLayout, L"the default of the settings file");
         }
 
         TEST_METHOD (MonitorKeyUsesDeviceAndInstanceElseOrigin)
@@ -451,7 +461,8 @@ namespace FancyZonesUnitTests
 
         TEST_METHOD (ResizingOneMonitorLeavesTheOtherAlone)
         {
-            const StageConfig::Values global;
+            StageConfig::Values global;
+            global.layout = L"master"; // the layout that owns a cut and rows
             std::map<std::wstring, StageMonitorValues> monitors;
             const auto one = StageConfig::Resolve(global, monitors, L"ONE");
             const auto two = StageConfig::Resolve(global, monitors, L"TWO");
@@ -538,7 +549,9 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(700, s.stageMasterCut);
             const auto values = StageConfig::Resolve(StageConfig::FromSettings(s), s.stageMonitors, L"DELA0B1_UID1");
             Assert::IsTrue(values == StageConfig::FromSettings(s), L"every monitor follows the old global values");
-            Assert::AreEqual(0.7, StageConfig::MakeLayout(values)->Cut(), 1e-9);
+            auto masterValues = values;
+            masterValues.layout = L"master";
+            Assert::AreEqual(0.7, StageConfig::MakeLayout(masterValues)->Cut(), 1e-9);
 
             // Huge numbers clamp to the limit instead of an undefined cast
             Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::StageMasterCutID, json::value(3e9), file));
@@ -582,6 +595,7 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(StageConfig::MonitorChange(pair, after).rows.has_value(), L"and never saves rows");
 
             StageConfig::Values master;
+            master.layout = L"master";
             master.rows = L"400,600";
             auto masterLayout = StageConfig::MakeLayout(master);
             masterLayout->SetRows({ 0.5, 0.5 });
@@ -659,9 +673,16 @@ namespace FancyZonesUnitTests
         {
             Assert::AreEqual(8, StageConfig::MasterMaxStack);
             StageConfig::Values values;
+            values.layout = L"master";
             const auto master = StageConfig::MakeLayout(values);
-            Assert::AreEqual(9, StageConfig::CapacityOf(*master), L"master + a stack of 8");
-            Assert::AreEqual((std::numeric_limits<int>::max)(), StageConfig::CapacityOf(*StageLayouts::MakeStage()), L"a strip shows every window");
+            Assert::AreEqual(9, StageConfig::CapacityOf(*master, StageLayouts::LRect(0, 0, 1920, 1080), StageLayouts::Spacing::MuntinDefault()), L"master + a stack of 8");
+            const StageLayouts::LRect work(0, 0, 2560, 1440);
+            const auto spacing = StageLayouts::Spacing::MuntinDefault();
+            Assert::AreEqual(9, StageConfig::CapacityOf(*master, work, spacing));
+            const int stageCap = StageConfig::CapacityOf(*StageLayouts::MakeStage(), work, spacing);
+            const int pairCap = StageConfig::CapacityOf(*StageLayouts::MakePair(), work, spacing);
+            Assert::IsTrue(stageCap > 2 && stageCap < 20, L"main + the tiles that fit");
+            Assert::IsTrue(pairCap >= 3 && pairCap < 20, L"pair: two docked slots + the tiles that fit");
 
             Assert::IsTrue(StageConfig::HasRoom(0, 9));
             Assert::IsTrue(StageConfig::HasRoom(8, 9));

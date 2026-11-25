@@ -1332,6 +1332,13 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 DockKey(wparam, static_cast<LONG>(lparam));
             }
         }
+        else if (message == WM_PRIV_STAGE_STRIP_CLICK)
+        {
+            if (m_stageMode)
+            {
+                m_stageMode->StripClick(reinterpret_cast<HWND>(wparam));
+            }
+        }
         else if (message == WM_PRIV_STAGE_KEY)
         {
             m_stageKeyGate.Completed();
