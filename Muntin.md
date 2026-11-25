@@ -130,6 +130,57 @@ Layouts are kept per monitor and per virtual desktop in `dock-layouts.json`, and
 
 To forget all layouts and saved digits, quit Muntin, delete `%LOCALAPPDATA%\Muntin\dock-layouts.json`, and start it again.
 
+### Stage mode
+
+Stage mode is a second way to arrange windows, ported from StageProto: Muntin takes the ordinary windows of each monitor and keeps them in a list, one monitor at a time. The first window is the main one, and the others sit beside it. Dock-by-drag stays the default. **Stage mode has not been tried live yet: read "Stage mode status and known limitations" before you turn it on.** The checklist for the first live run is in [doc/muntin/STAGE-LIVE-TEST.md](doc/muntin/STAGE-LIVE-TEST.md).
+
+**Switch:** right-click the tray icon and choose **Arrange: Dock / Stage** (checked means Stage), or set `fancyzones_arrangeMode` in `settings.json` to `1` (Stage) or `0` (Dock). The change applies at once: switching to Stage starts after about 0.7 seconds, and switching back puts every window back where it was before Stage took it (size, position, minimized or maximized).
+
+**Layouts:** three layouts, the same on every monitor. Set one with `fancyzones_stageLayout`, or press **Win+Shift+L** to go to the next one (Stage, then Pair, then Master, then Stage again). The choice is saved.
+
+| Layout | What you get |
+|---|---|
+| Master (the default) | The main window on the left, the other windows stacked on its right with equal heights. Up to 9 windows per monitor (the main one and 8 in the stack). Windows beyond that are not taken by Stage and stay where they are, until room appears. |
+| Stage | The main window large, a strip of live thumbnails of the other windows on the right |
+| Pair | Two windows side by side, and a strip of thumbnails on the right from the third window on |
+
+In Stage and Pair the strip shows as many tiles as fit; the rest are reached with the wheel or the keys. The strip is an overlay of its own. It hides while a window is maximized or a window of another app covers the monitor, such as a fullscreen game or video.
+
+**Keys** (they work on the window Stage manages that has the focus; while the focus is on the taskbar, Start or an overlay they act on the last managed window; on any other window they keep their Windows meaning). They don't need `fancyzones_overrideSnapHotkeys`. Muntin also keeps the Start menu from opening when you press Win for these.
+
+| Keys | Action |
+|---|---|
+| Win+Left | Rotate: the main window goes to the end of the list, the next one becomes main. Repeats while held. |
+| Win+Right | Rotate the other way: the last window becomes main. Repeats while held. |
+| Win+Up | Promote: the focused window becomes the main one |
+| Win+Down | Demote: the focused window goes to the end of the list |
+| Win+Shift+Left, Win+Shift+Right | Move the focused window to the monitor on that side (the monitors are ordered by screen position, and the last wraps to the first) |
+| Win+Shift+L | Next layout (Win+L locks Windows, so it can't be used) |
+
+A minimized window keeps its place in the list but takes no part in the rotation and doesn't get the focus.
+
+**Mouse:**
+
+- Drag a border that two windows share to move it. The neighbors follow while you drag, and the new cut is saved when you let go. In Master it moves the edge between the main window and the stack, and the heights in the stack. In Pair it moves the edge between the two. Stage has no movable edge.
+- Drag a window by its title bar and drop it on the place of another window: the two swap. A drop anywhere else, or Esc, snaps the window back. A drop that Windows reads as snap (Aero Snap, Snap Layouts) also snaps back and changes no cut.
+- Drag a window to another monitor: it joins the stage of that monitor.
+- Click a tile of the strip: that window becomes the main one.
+- Roll the wheel over the strip: the tiles scroll. This needs the Windows setting "Scroll inactive windows when hovering" to be on (it is by default).
+
+**Per monitor:** the cut and the heights of the stack are kept per monitor, so a drag on one screen leaves the others alone. See `fancyzones_stageMonitors` below. The layout name is the same everywhere.
+
+**Which windows Stage takes:** ordinary top-level windows that are visible, not minimized, have a title and a resizable frame, and are at least 100 by 60 pixels. It leaves alone dialogs (owned windows), tool windows, topmost windows, shell and system windows, Muntin's own windows, windows of apps that run as administrator, windows that don't answer, and windows another program has marked (see below). A window that can't get small enough for Master's slots (its minimum size) is released and floats until there is room. A dialog of a window that is waiting in the strip or parked brings that window forward. New windows are taken as they appear. The setting `fancyzones_excluded_apps` is not read by Stage mode.
+
+**Files and recovery:** before Stage moves a window, it writes the place the window had to `stage-state.txt` in `%LOCALAPPDATA%\Muntin`. The file is deleted when Stage mode ends cleanly (switching back to Dock, or **Quit**). If Muntin dies while in Stage mode, the helper process (`Muntin.exe --watchdog`, see "Emergency exit") puts every window back from that file, and so does the next start of Muntin. If something still looks wrong after a crash:
+
+1. Check `Get-Process Muntin`. If a Muntin runs, switch to Dock from the tray and back if needed. If none runs, start `Muntin.exe`: it restores from `stage-state.txt` when it starts.
+2. Look at `watchdog.log` in the data folder for a line saying the helper could not do its job, and at the Muntin log for lines that start with `Stage:` (each window taken or skipped is logged with its reason).
+3. Windows parked as a one pixel strip at the bottom of a monitor are the usual leftovers: they come back with step 1.
+
+Don't delete `stage-state.txt` by hand while windows are still arranged, because it is the only record of where they were.
+
+**Another program that arranges windows (StageProto):** a window that carries the window property `Muntin.HandsOff`, whose value is the process id of a running `pwsh.exe` or `powershell.exe`, is left alone by Muntin in both modes. A stale id (that process is gone, or the id now belongs to another program) does not count. The StageProto side of this (setting the property) is not part of this repository; whether StageProto sets it yet is unverified.
+
 ## Configure it
 
 The tray menu (right-click the Muntin icon) turns the most used settings on and off. All settings are in one file:
@@ -194,6 +245,32 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_makeDraggedWindowTransparent` | The dragged window is see-through while docking is active | `true` |
 | `fancyzones_layoutNameLabelEnabled` | Show a label when a layout is saved or recalled | `true` |
 
+### Stage mode
+
+These settings exist only in the fork. See "Stage mode" above.
+
+| Setting | Meaning | Default | Allowed |
+|---|---|---|---|
+| `fancyzones_arrangeMode` | `0`: Dock (dock-by-drag), `1`: Stage. Also the tray item "Arrange: Dock / Stage". | 0 | 0 or 1 |
+| `fancyzones_stageLayout` | The layout of every monitor. Win+Shift+L changes it. | `"master"` | `"stage"`, `"pair"`, `"master"` (anything else is ignored) |
+| `fancyzones_stagePairCut` | Where the vertical edge of the Pair layout sits, in thousandths of the usable width | 500 | 150 to 850 |
+| `fancyzones_stageMasterCut` | The same for the Master layout (the main window's share) | 600 | 150 to 850 |
+| `fancyzones_stageRows` | Master layout: the heights of the stack windows as shares in thousandths, comma separated (for example `"500,300,200"`). Empty means equal heights. | `""` | |
+| `fancyzones_stageMonitors` | What single monitors override: an object from monitor key to `pairCut`, `masterCut` and `rows` (each optional, a missing one follows the global setting above) | none | cuts 150 to 850 |
+
+The three global values are the defaults. Dragging a shared edge saves into `fancyzones_stageMonitors` for that monitor only. The key of a monitor is its display device id and instance id joined with an underscore (`<device id>_<instance id>`, from the display lookup, no serial number). When the lookup can't identify a monitor, the key is `@left,top` of its screen position, for example `@0,0`. The easiest way to get a real key is to drag an edge on that monitor once and read `settings.json`. Example:
+
+```json
+"fancyzones_stageMonitors": {
+  "value": {
+    "<device id>_<instance id>": { "masterCut": 700, "rows": "600,400" },
+    "@2560,0": { "pairCut": 450 }
+  }
+}
+```
+
+A monitor that is plugged in again gets its entry back through its key. Removing the entry (or the whole setting) makes the monitor follow the global values.
+
 ### Settings that no longer do anything
 
 The fork ignores the zone settings: the zone editor hotkey, zone numbers, "show zones on all monitors", "move newly created windows to their last known zone", "move windows based on their position", and the overlapping zones choice.
@@ -210,6 +287,32 @@ Early builds kept their files in the folder of PowerToys FancyZones, `%LOCALAPPD
 - The hotkeys for saved layouts are fixed in code.
 - Windows of apps that run as administrator can't be docked unless the fork runs as administrator too.
 - Docking is off when "span zones across monitors" is on.
+
+## Stage mode status and known limitations
+
+Stage mode is code-complete and unit tested, but **nothing that touches real windows has been verified live**. What the tests cover is the pure logic: the layouts, the state file format, the key table, the mouse decisions, the strip plan, per-monitor settings. What was never run on a real desktop:
+
+- Entering and leaving Stage mode on real windows, the restore of size, position, maximized and minimized state, and DPI behavior between monitors of different scaling (a bug of this kind was found and fixed by reading, not by a live test).
+- Recovery by the helper process after a crash, including the change that starts it as a child of the shell so that `taskkill /T` on Muntin doesn't take it along. The helper is not started that way when Muntin runs as administrator.
+- The overlay of the strip: thumbnails, rounded tiles, hover, wheel scrolling, the animation, and hiding over fullscreen apps.
+- Tray switching on a real run: an early report said the tray toggle did not seem to enter Stage mode, and no cause was found by reading. Logging was added; read the log after a toggle.
+- Keys: the Win mask that keeps Start from opening, and the swallowing of the chord's key-up.
+- Mouse: title bar swap, shared edge resize, drop on another monitor, and moves made by other means (Win+Shift+Arrow of Windows, app moves), which are noticed by a one second poll.
+- Several monitors: unplug and replug (windows move to the remaining monitor and return), a new monitor taking the key of a gone one, and the per-monitor cut on a real second display.
+- The `Muntin.HandsOff` handshake with a running StageProto: only the Muntin side exists.
+
+Known limitations, found while reviewing and left as they are:
+
+- The strip is clipped to the work area: tiles that don't fit are reached by the wheel or keys. The wheel needs "Scroll inactive windows when hovering"; with it off, those windows are reached by keys only. Win+Shift+wheel is not handled.
+- A tile that scrolls in snaps to its place while the one leaving still eases out, so two thumbnails can overlap for up to 0.3 seconds. Hover can stay stale under a still cursor after a scroll.
+- The scroll position of the strip is forgotten when the strip hides and shows again.
+- While you drag an edge, windows that wait to be taken (new ones) wait until the drag ends.
+- Master holds 9 windows per monitor; beyond that windows are not taken. A window whose minimum size doesn't fit is released and floats.
+- A window that is stuck maximized (it would not restore) is skipped, and one that spans more than one monitor may be clamped to the size of a single monitor when it is put back.
+- The order of the list is not saved: after a restart, windows are taken in z-order again. Rotating does not write the state file.
+- Flashing windows (apps asking for attention) are not brought forward.
+- `fancyzones_excluded_apps` is not used in Stage mode.
+- Dock-by-drag and the desktop scroll leave the windows that Stage holds alone: they don't act on them in Stage mode.
 
 ## Install it on another computer
 
