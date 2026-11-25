@@ -276,8 +276,12 @@ namespace StageState
         return r.R > r.L && (monitors.empty() || OnScreenPx(r, monitors) >= 4);
     }
 
-    // A saved rect wider or taller than any monitor (plus the invisible frame, 32 px) cannot be a real window: it came from a
-    // coordinate mix-up. It is brought down to the size of the monitor it overlaps most and moved onto it. Other rects stay as they are.
+    // A saved rect wider or taller than any monitor (plus the invisible frame, 32 px) cannot be a real window, unless it really spans
+    // monitors: it then lies inside the bounding box of the monitors (plus the frame) and overlaps at least two of them. Otherwise it
+    // came from a coordinate mix-up (a virtualized rect also reaches past the monitors) and is brought down to the size of the monitor it
+    // overlaps most and moved onto it. Other rects stay as they are, so a window that spans two monitors comes back as it was.
+    // KNOWN LIMIT: a virtualized rect of a window SMALLER than the biggest monitor cannot be told from a real one here; Enter
+    // captures under per-monitor awareness (StageDpi), so only a state file of an older build can carry one.
     inline StageLayouts::LRect SaneRect(const StageLayouts::LRect& r, const std::vector<StageLayouts::LRect>& monitors)
     {
         constexpr int frame = 32;
@@ -286,15 +290,21 @@ namespace StageState
             return r;
         }
 
-        int maxW = 0, maxH = 0;
+        int maxW = 0, maxH = 0, overlapping = 0;
+        int boxL = monitors.front().L, boxT = monitors.front().T, boxR = monitors.front().R, boxB = monitors.front().B;
         const StageLayouts::LRect* best = &monitors.front();
         long long bestArea = -1;
         for (const auto& m : monitors)
         {
             maxW = (std::max)(maxW, m.W());
             maxH = (std::max)(maxH, m.H());
+            boxL = (std::min)(boxL, m.L);
+            boxT = (std::min)(boxT, m.T);
+            boxR = (std::max)(boxR, m.R);
+            boxB = (std::max)(boxB, m.B);
             const long long w = (std::max)(0, (std::min)(r.R, m.R) - (std::max)(r.L, m.L));
             const long long h = (std::max)(0, (std::min)(r.B, m.B) - (std::max)(r.T, m.T));
+            overlapping += (w > 0 && h > 0) ? 1 : 0;
             if (w * h > bestArea)
             {
                 bestArea = w * h;
@@ -305,6 +315,12 @@ namespace StageState
         if (r.W() <= maxW + frame && r.H() <= maxH + frame)
         {
             return r;
+        }
+
+        const bool inBox = r.L >= boxL - frame && r.T >= boxT - frame && r.R <= boxR + frame && r.B <= boxB + frame;
+        if (inBox && overlapping >= 2)
+        {
+            return r; // Really spans monitors
         }
 
         const int w = (std::min)(r.W(), best->W()), h = (std::min)(r.H(), best->H());
@@ -394,6 +410,41 @@ namespace StageState
         }
 
         return StageLayouts::LRect(nl + cx, nt + cy, nr + cx, nb + cy);
+    }
+
+    // The monitor a window goes to when its own is gone: the one at 0,0, else the first
+    inline StageLayouts::LRect PrimaryOf(const std::vector<StageLayouts::LRect>& monitors)
+    {
+        for (const auto& m : monitors)
+        {
+            if (m.L <= 0 && 0 < m.R && m.T <= 0 && 0 < m.B)
+            {
+                return m;
+            }
+        }
+
+        return monitors.empty() ? StageLayouts::LRect() : monitors.front();
+    }
+
+    // A saved rect that lies on no monitor any more (it was on one that is unplugged): moved onto the primary monitor, 32 px in from its
+    // corner and slid inside. A rect that is still on a monitor stays as it is.
+    inline StageLayouts::LRect OnAVisibleMonitor(const StageLayouts::LRect& r, const std::vector<StageLayouts::LRect>& monitors)
+    {
+        if (monitors.empty() || RectUsable(r, monitors) || r.R <= r.L)
+        {
+            return r;
+        }
+
+        const auto to = PrimaryOf(monitors);
+        const StageLayouts::LRect fake(r.L - 32, r.T - 32, r.R - 32, r.B - 32); // makes the shift land 32 px from the monitor corner
+        return ShiftIntoMonitor(r, fake, to);
+    }
+
+    inline Entry OnVisibleMonitors(Entry e, const std::vector<StageLayouts::LRect>& monitors)
+    {
+        e.rect = OnAVisibleMonitor(e.rect, monitors);
+        e.normal = OnAVisibleMonitor(e.normal, monitors);
+        return e;
     }
 
     // Was the window one of the docked (shown) windows of its stage? Then it joins the other stage docked too (the layout decides
@@ -503,5 +554,29 @@ namespace StageState
 
         pending = {};
         return { bw, bh, false };
+    }
+
+    // Minimum-size cut (Phase 6). A layout without a strip (master) cannot show a window its minimum sizes squeezed out of the stack:
+    // the plan marks it Role::Hidden. Parked it would sit as an invisible sliver with no way back but the keys, so the stage lets such
+    // a window go instead (it is released: back where it was, floating, visible, never held). Layouts with a strip have a tile for
+    // every window that has no slot, so nothing is cut there. keep(id): windows to leave alone for now (a modal dialog hangs off it, the
+    // user drags it). Last in the layout order first.
+    inline std::vector<int> MinSizeCut(const StageLayouts::Plan& plan, const std::function<bool(int)>& keep = {})
+    {
+        std::vector<int> cut;
+        if (plan.HasStrip)
+        {
+            return cut;
+        }
+
+        for (auto it = plan.Items.rbegin(); it != plan.Items.rend(); ++it)
+        {
+            if (it->Role == StageLayouts::Role::Hidden && !(keep && keep(it->Id)))
+            {
+                cut.push_back(it->Id);
+            }
+        }
+
+        return cut;
     }
 }

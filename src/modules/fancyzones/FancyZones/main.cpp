@@ -281,6 +281,76 @@ namespace
         return 0;
     }
 
+    bool IsElevated() noexcept
+    {
+        wil::unique_handle token;
+        TOKEN_ELEVATION elevation{};
+        DWORD size = 0;
+        return OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, token.put()) && GetTokenInformation(token.get(), TokenElevation, &elevation, sizeof(elevation), &size) && elevation.TokenIsElevated != 0;
+    }
+
+    // The shell's process, to be the parent of the watchdog (see Watchdog::SpawnAttempts)
+    wil::unique_handle OpenShellProcess() noexcept
+    {
+        DWORD shellProcess = 0;
+        const HWND shell = GetShellWindow();
+        if (!shell || !GetWindowThreadProcessId(shell, &shellProcess) || shellProcess == 0)
+        {
+            return {};
+        }
+
+        return wil::unique_handle(OpenProcess(PROCESS_CREATE_PROCESS, FALSE, shellProcess));
+    }
+
+    // Tries the ways of Watchdog::SpawnAttempts one after the other until a process starts
+    bool SpawnWatchdogProcess(const wchar_t* exe, std::wstring& commandLine, PROCESS_INFORMATION& info) noexcept
+    {
+        const auto shell = OpenShellProcess();
+        for (const auto& attempt : Watchdog::SpawnAttempts(shell.is_valid(), IsElevated()))
+        {
+            STARTUPINFOEXW startup{};
+            startup.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+            DWORD flags = CREATE_NO_WINDOW | (attempt.breakaway ? CREATE_BREAKAWAY_FROM_JOB : 0);
+            std::vector<BYTE> attributes;
+            bool listReady = false;
+            if (attempt.shellParent)
+            {
+                SIZE_T size = 0;
+                InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+                attributes.resize(size);
+                auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributes.data());
+                HANDLE parent = shell.get();
+                if (size == 0 || !InitializeProcThreadAttributeList(list, 1, 0, &size))
+                {
+                    continue;
+                }
+
+                listReady = true;
+                if (!UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, &parent, sizeof(parent), nullptr, nullptr))
+                {
+                    DeleteProcThreadAttributeList(list);
+                    continue;
+                }
+
+                startup.lpAttributeList = list;
+                flags |= EXTENDED_STARTUPINFO_PRESENT;
+            }
+
+            const BOOL created = CreateProcessW(exe, commandLine.data(), nullptr, nullptr, FALSE, flags, nullptr, nullptr, &startup.StartupInfo, &info);
+            if (listReady)
+            {
+                DeleteProcThreadAttributeList(startup.lpAttributeList);
+            }
+
+            if (created)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     // Starts the watchdog for this process
     void StartWatchdog() noexcept
     {
@@ -293,11 +363,8 @@ namespace
         wchar_t exe[MAX_PATH]{};
         GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
         std::wstring commandLine = L"\"" + std::wstring{ exe } + L"\" --watchdog " + std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(FileTimeValue(created));
-        STARTUPINFOW startup{ .cb = sizeof(STARTUPINFOW) };
         PROCESS_INFORMATION info{};
-        // Out of the job of Muntin if it is allowed to, so that whatever ends the job leaves the watchdog to put the windows back
-        const bool started = CreateProcessW(exe, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB, nullptr, nullptr, &startup, &info) ||
-                             CreateProcessW(exe, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &info);
+        const bool started = SpawnWatchdogProcess(exe, commandLine, info);
         if (started)
         {
             CloseHandle(info.hThread);

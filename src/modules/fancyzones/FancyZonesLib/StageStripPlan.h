@@ -74,9 +74,16 @@ namespace StageStripPlan
         return window.L <= monitor.L && window.T <= monitor.T && window.R >= monitor.R && window.B >= monitor.B;
     }
 
-    inline bool Suppressed(bool anyZoomed, bool anyCoversMonitor)
+    // A window of ANOTHER process (not held by the stage) that is in front and fills the monitor: exclusive or borderless fullscreen.
+    // The desktop and the taskbar fill monitors too and never count.
+    inline bool FullscreenOver(const LRect& foreground, const LRect& monitor, bool isShell)
     {
-        return anyZoomed || anyCoversMonitor;
+        return !isShell && CoversMonitor(foreground, monitor);
+    }
+
+    inline bool Suppressed(bool anyZoomed, bool anyCoversMonitor, bool foreignFullscreen = false)
+    {
+        return anyZoomed || anyCoversMonitor || foreignFullscreen;
     }
 
     // The strip of a plan: one tile per StripTile item (in plan order), `fit` of them completely inside the usable area; the others are

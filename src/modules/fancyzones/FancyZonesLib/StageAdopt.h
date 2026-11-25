@@ -48,6 +48,7 @@ namespace StageAdopt
         bool monitorKnown{ true }; // the window is on a monitor with a stage
         bool elevatedBlocked{}; // the window's process is elevated and Muntin is not: it cannot be moved
         bool stuckMaximized{}; // we asked it to restore and it would not: not taken again until it is not maximized
+        bool cutLoose{}; // the stack had no room for it at its minimum size (StageState::MinSizeCut): left floating until room appears
         bool heldElsewhere{}; // parked by the desktop scroll, or arranged by StageProto (Muntin.HandsOff)
     };
 
@@ -91,6 +92,8 @@ namespace StageAdopt
             return L"too small";
         if (w.stuckMaximized)
             return L"stuck maximized (it would not restore)";
+        if (w.cutLoose)
+            return L"cut by minimum sizes (left floating until there is room)";
         if (w.heldElsewhere)
             return L"held by the desktop scroll or StageProto";
         if (w.onScreenPx < 4)
@@ -137,5 +140,36 @@ namespace StageAdopt
         }
 
         return owners;
+    }
+
+    // A held window that is parked (strip tile or hidden) and now has a modal dialog open: the dialog would float over nothing, so the
+    // window comes forward (promoted; the focus is left alone). owners: DialogOwners of the open dialogs. Windows that are guarded already (never
+    // parked while the dialog is open) and windows that are not parked are fine as they are.
+    struct ParkedFacts
+    {
+        HWND window{};
+        bool parked{};
+        bool guarded{};
+        bool iconic{};
+    };
+
+    // The order does not change under a window the user holds by the mouse
+    inline bool MayPromoteOwners(bool dragging)
+    {
+        return !dragging;
+    }
+
+    inline std::vector<HWND> NeedsFront(const std::vector<ParkedFacts>& windows, const std::set<HWND>& owners)
+    {
+        std::vector<HWND> result;
+        for (const auto& w : windows)
+        {
+            if (w.parked && !w.guarded && !w.iconic && owners.contains(w.window))
+            {
+                result.push_back(w.window);
+            }
+        }
+
+        return result;
     }
 }

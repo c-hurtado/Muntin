@@ -15,6 +15,7 @@
 #include <FancyZonesLib/StageConfig.h>
 #include <FancyZonesLib/StageKeys.h>
 #include <FancyZonesLib/StageLayouts.h>
+#include <FancyZonesLib/StageMonitors.h>
 #include <FancyZonesLib/StageMouse.h>
 #include <FancyZonesLib/StagePark.h>
 #include <FancyZonesLib/StageState.h>
@@ -106,6 +107,7 @@ private:
         StageLayouts::LRect rect; // whole monitor
         StageLayouts::LRect work;
         std::wstring key; // StageConfig::MonitorKey: what this monitor's cut and rows are saved under
+        UINT dpi{}; // effective DPI, 0 = unknown: a change makes the windows' minimum sizes stale
     };
 
     struct MonitorStage
@@ -152,6 +154,10 @@ private:
     // the docked windows only (no parking, no dialog scan, no minimum-size check).
     void Land(MonitorStage& stage, int skipId = 0, bool dockedOnly = false);
     void LandAll();
+    void LooseCut(const std::vector<int>& ids);
+    void PromoteDialogOwners();
+    void ResetMin(Managed& m);
+    bool ForeignFullscreenOn(const MonitorStage& stage) const;
     void SyncStrip();
     bool StripCovered(const MonitorStage& stage) const;
     void RefreshStripCover();
@@ -204,6 +210,11 @@ private:
     ULONGLONG m_enterAt{}; // Enter is waiting (a Leave's restores, the scroll's return)
     ULONGLONG m_enterSince{};
     ULONGLONG m_enterNotBefore{};
+    std::set<HWND> m_loose; // cut by minimum sizes and released: not taken again until room appears (a window left, layout or display changed)
+    int m_loosening{}; // inside LooseCut: its releases do not clear m_loose
+    StageMonitors::Exiles m_exiled; // windows sent to the primary stage by a monitor that went away, and the key of that monitor
+    bool m_remeasure{}; // a monitor changed size or scale: minimum sizes are measured again at the next relayout
+    ULONGLONG m_dialogAt{}; // a dialog (owned window) appeared: look whether a parked window owns a modal one
     std::set<HWND> m_stuck; // would not leave the maximized state: skipped until they do
     std::map<HWND, std::wstring> m_logged; // last verdict logged per window
     ULONGLONG m_relayoutAt{};

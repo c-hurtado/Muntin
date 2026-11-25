@@ -66,6 +66,7 @@
     <ClInclude Include="StageStrip.h" />
     <ClInclude Include="StageStripPlan.h" />
     <ClInclude Include="StageStripMotion.h" />
+    <ClInclude Include="StageMonitors.h" />
     <ClInclude Include="StagePark.h" />
     <ClInclude Include="StageState.h" />
     <ClInclude Include="DesktopScroll.h" />

@@ -30,6 +30,7 @@ namespace
     constexpr ULONGLONG VerifyRetryMillis = 400; // A size was seen once: look again before believing it
     constexpr ULONGLONG VerifyDelayMillis = 600; // After a landing: look at how the windows really came out
     constexpr ULONGLONG GuardMillis = 500; // Modal dialog check
+    constexpr ULONGLONG DialogLookMillis = 200; // After a dialog came up: its owner is disabled by then
     constexpr ULONGLONG OrphanMillis = 1500;
     constexpr int MaxOrphanTries = 20;
     constexpr int ScansAfterEnter = 4; // x ScanRepeatMillis: stragglers (windows still coming back, apps that were busy)
@@ -199,7 +200,8 @@ StageMode::~StageMode()
 
 bool StageMode::RestoreEntry(const StageState::Entry& saved, const std::vector<Rect>& monitors, bool minimized)
 {
-    const StageState::Entry entry = StageState::Sanitized(saved, monitors); // A rect from a coordinate mix-up is brought down to a monitor
+    // A rect from a coordinate mix-up is brought down to a monitor; one on a monitor that is unplugged goes onto the primary one
+    const StageState::Entry entry = StageState::OnVisibleMonitors(StageState::Sanitized(saved, monitors), monitors);
     const HWND window = Window(entry.hwnd);
     if (!IsWindow(window))
     {
@@ -382,10 +384,23 @@ void StageMode::RefreshMonitors()
     {
         const auto device = devices.find(m.handle);
         const auto& [id, instance] = device != devices.end() ? device->second : std::pair<std::wstring, std::wstring>{};
-        const auto before = std::find_if(previous.begin(), previous.end(), [&](const MonitorInfo& p) { return p.rect.Same(m.rect); });
-        const auto choice = StageConfig::ChooseKey(id, instance, m.rect.L, m.rect.T, before != previous.end() ? before->key : std::wstring());
+        // The key it had: same rect, else same origin (a resolution change moves no origin of the monitor at 0,0)
+        // A real key is inherited only for the same rect; the same corner only inherits a key that is itself just a place
+        std::vector<StageMonitors::Id> lastLook;
+        for (const auto& p : previous)
+        {
+            lastLook.push_back({ p.key, p.rect });
+        }
+
+        const auto choice = StageConfig::ChooseKey(id, instance, m.rect.L, m.rect.T, StageMonitors::InheritKey(lastLook, m.rect));
         unresolved |= !choice.resolved;
-        m_monitors.push_back({ m.handle, m.rect, m.work, choice.key });
+        UINT dpi = 0, ignored = 0;
+        if (FAILED(GetDpiForMonitor(m.handle, MDT_EFFECTIVE_DPI, &dpi, &ignored)))
+        {
+            dpi = 0;
+        }
+
+        m_monitors.push_back({ m.handle, m.rect, m.work, choice.key, dpi });
     }
 
     // A monitor that is not identified yet (waking up): look again shortly, a few times, rather than save its cut under a guessed key
@@ -401,15 +416,33 @@ void StageMode::RefreshMonitors()
         m_keyRetries = 0;
     }
 
-    std::vector<MonitorStage> next;
+    // Each stage finds its monitor again by the stable key (a resolution change keeps its windows, order, cut and rows), then by place
+    std::vector<StageMonitors::Id> oldIds, newIds;
+    for (const auto& s : m_stages)
+    {
+        oldIds.push_back({ s.monitor.key, s.monitor.rect });
+    }
+
     for (const auto& monitor : m_monitors)
     {
-        const auto old = std::find_if(m_stages.begin(), m_stages.end(), [&](const MonitorStage& s) { return s.monitor.rect.Same(monitor.rect); });
-        if (old != m_stages.end())
+        newIds.push_back({ monitor.key, monitor.rect });
+    }
+
+    const auto match = StageMonitors::MatchStages(oldIds, newIds);
+    std::vector<MonitorStage> next;
+    for (size_t n = 0; n < m_monitors.size(); n++)
+    {
+        const auto& monitor = m_monitors[n];
+        if (match[n] >= 0)
         {
-            const bool sameMonitor = old->monitor.key == monitor.key;
-            next.push_back(std::move(*old));
-            m_stages.erase(old);
+            auto& old = m_stages[static_cast<size_t>(match[n])];
+            const bool sameMonitor = old.monitor.key == monitor.key;
+            if (StageMonitors::SizeChanged(old.monitor.rect, monitor.rect, old.monitor.dpi, monitor.dpi))
+            {
+                m_remeasure = true; // Their minimum sizes were measured for another size or scale
+            }
+
+            next.push_back(std::move(old));
             next.back().monitor = monitor;
             if (!sameMonitor)
             {
@@ -428,19 +461,73 @@ void StageMode::RefreshMonitors()
         }
     }
 
-    // The windows of a monitor that is gone join the primary one
+    // The windows of a monitor that is gone join the primary one, and are remembered for when it is back
     auto primary = std::find_if(next.begin(), next.end(), [](const MonitorStage& s) { return s.monitor.rect.L <= 0 && 0 < s.monitor.rect.R && s.monitor.rect.T <= 0 && 0 < s.monitor.rect.B; });
     if (primary == next.end())
     {
         primary = next.begin();
     }
 
-    for (auto& gone : m_stages)
+    for (const int index : StageMonitors::GoneStages(m_stages.size(), match))
     {
+        auto& gone = m_stages[static_cast<size_t>(index)];
+        if (gone.order.empty())
+        {
+            continue;
+        }
+
+        Logger::info(L"Stage: a monitor is gone, its {} window(s) join the primary stage", gone.order.size());
+        std::vector<std::uintptr_t> windows;
+        for (const int id : gone.order)
+        {
+            const auto it = m_windows.find(id);
+            if (it != m_windows.end())
+            {
+                windows.push_back(reinterpret_cast<std::uintptr_t>(it->second.window));
+                ResetMin(it->second); // Measured for the other monitor's scale
+            }
+        }
+
+        StageMonitors::Exile(m_exiled, windows, gone.monitor.key);
+        m_remeasure = true; // The relayout measures them again before it lands them
         primary->order.insert(primary->order.end(), gone.order.begin(), gone.order.end());
     }
 
     m_stages = std::move(next);
+
+    // A monitor that is back gets its windows back (the ones that are still held, and where there is room)
+    for (auto& stage : m_stages)
+    {
+        for (const auto handle : StageMonitors::TakeReturning(m_exiled, stage.monitor.key))
+        {
+            auto* held = Find(reinterpret_cast<HWND>(handle));
+            if (!held)
+            {
+                // Not held right now (cut by minimum sizes, minimized): the record stays, Adopt sends it home when it is taken again
+                m_exiled[handle] = stage.monitor.key;
+                continue;
+            }
+
+            const int id = held->id;
+            MonitorStage* from = StageOfId(id);
+            if (!from || from == &stage)
+            {
+                continue;
+            }
+
+            if (!StageConfig::HasRoom(stage.order.size(), Capacity(stage)))
+            {
+                m_exiled[handle] = stage.monitor.key; // No room yet: it stays away and asks again at the next display change
+                continue;
+            }
+
+            from->layout->Remove(from->order, id);
+            stage.layout->Join(stage.order, id, false);
+            ResetMin(*held);
+            m_remeasure = true;
+            Logger::info(L"Stage: a window returns to its monitor");
+        }
+    }
 }
 
 StageMode::MonitorStage* StageMode::StageOfRect(const Rect& monitorRect)
@@ -540,6 +627,7 @@ StageAdopt::AdoptInfo StageMode::Describe(HWND window)
     info.monitorKnown = StageFor(window) != nullptr;
     info.elevatedBlocked = !is_process_elevated() && IsProcessOfWindowElevated(window);
     info.heldElsewhere = DesktopScroll::IsParked(window) || MarkedByOther(window);
+    info.cutLoose = m_loose.contains(window);
     info.stuckMaximized = m_stuck.contains(window);
     if (info.stuckMaximized && !StageState::StillStuck(true, IsZoomed(window) != FALSE))
     {
@@ -736,6 +824,21 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
     const bool anyParked = !dockedOnly && std::any_of(plan.Items.begin(), plan.Items.end(), [](const StageLayouts::PlanItem& i) { return i.Role == StageLayouts::Role::Hidden; });
     const auto dialogs = anyParked ? StageAdopt::DialogOwners(DialogCandidates()) : std::set<HWND>{};
 
+    // Windows the stack has no room for at their minimum size (a layout without a strip): they are let go, not parked out of sight
+    if (!dockedOnly)
+    {
+        const auto cut = StageState::MinSizeCut(plan, [&](int id) {
+            const auto it = m_windows.find(id);
+            return it == m_windows.end() || id == skipId || (m_drag && m_drag->id == id) || it->second.guarded || it->second.needMeasure || dialogs.contains(it->second.window) ||
+                   !IsWindow(it->second.window) || IsIconic(it->second.window) || IsZoomed(it->second.window);
+        });
+        if (!cut.empty())
+        {
+            LooseCut(cut); // Re-lands this stage (Release does)
+            return;
+        }
+    }
+
     bool guarded = false;
     for (const auto& item : plan.Items)
     {
@@ -875,7 +978,7 @@ bool StageMode::StripCovered(const MonitorStage& stage) const
         covers = covers || (GetWindowRect(it->second.window, &rect) && StageStripPlan::CoversMonitor(ToRect(rect), stage.monitor.rect));
     }
 
-    return StageStripPlan::Suppressed(zoomed, covers);
+    return StageStripPlan::Suppressed(zoomed, covers, ForeignFullscreenOn(stage));
 }
 
 // The slow poll: a window maximized or made fullscreen raises no event the stage hears
@@ -948,6 +1051,95 @@ void StageMode::LandAll()
     {
         Land(stage);
     }
+}
+
+// Minimum-size cut: the windows go back where they were and stay out of the stage until something changes (room appears)
+void StageMode::LooseCut(const std::vector<int>& ids)
+{
+    m_loosening++;
+    for (const int id : ids)
+    {
+        const auto found = m_windows.find(id);
+        if (found == m_windows.end())
+        {
+            continue; // An earlier release re-landed the stage and already took it
+        }
+
+        const HWND window = found->second.window;
+        m_loose.insert(window);
+        LogDecision(window, L"released: no room for it at its minimum size, it stays floating");
+        Release(id, false, true);
+    }
+
+    m_loosening--;
+}
+
+// The minimum sizes an app reported (or that were learned) belong to a monitor scale the window is no longer on
+void StageMode::ResetMin(Managed& m)
+{
+    m.minW = m.minH = 0;
+    m.learned = 0;
+    m.pending = {};
+}
+
+// A parked window (strip tile, hidden) that opens a modal dialog: the dialog would float over nothing. The window comes forward as if
+// its tile had been clicked (it takes the master slot; the focus is not touched: the dialog has it or the user's window keeps it).
+void StageMode::PromoteDialogOwners()
+{
+    if (!StageAdopt::MayPromoteOwners(m_drag.has_value()))
+    {
+        return; // The user has a window by the mouse: the order does not change under it
+    }
+
+    std::vector<StageAdopt::ParkedFacts> facts;
+    for (const auto& [_, m] : m_windows)
+    {
+        if (m.parked && !m.guarded)
+        {
+            facts.push_back({ m.window, m.parked, m.guarded, IsIconic(m.window) != FALSE });
+        }
+    }
+
+    if (facts.empty())
+    {
+        return;
+    }
+
+    const auto owners = StageAdopt::DialogOwners(DialogCandidates());
+    for (const HWND window : StageAdopt::NeedsFront(facts, owners))
+    {
+        auto* m = Find(window);
+        MonitorStage* stage = m ? StageOfId(m->id) : nullptr;
+        if (!m || !stage || !stage->layout->PromoteHidden(stage->order, m->id))
+        {
+            continue;
+        }
+
+        Logger::info(L"Stage: a parked window opened a dialog, it comes forward hwnd={:x} class={}", reinterpret_cast<uintptr_t>(window), ClassOf(window));
+        Land(*stage);
+    }
+}
+
+// A window of another process that fills the monitor (exclusive or borderless fullscreen, a video, a game) has the foreground: the
+// strip must not float over it. The shell (desktop, taskbar) and our own windows do not count.
+bool StageMode::ForeignFullscreenOn(const MonitorStage& stage) const
+{
+    const HWND foreground = ForegroundRoot();
+    if (!foreground || !IsWindowVisible(foreground) || IsIconic(foreground) || IsCloaked(foreground))
+    {
+        return false;
+    }
+
+    DWORD pid{};
+    GetWindowThreadProcessId(foreground, &pid);
+    RECT rect{};
+    if (pid == GetCurrentProcessId() || !GetWindowRect(foreground, &rect))
+    {
+        return false;
+    }
+
+    const auto cls = ClassOf(foreground);
+    return StageStripPlan::FullscreenOver(ToRect(rect), stage.monitor.rect, cls == L"Progman" || cls == L"WorkerW" || cls == L"Shell_TrayWnd" || cls == L"Shell_SecondaryTrayWnd");
 }
 
 // After the real windows landed: a docked window that came out bigger than its slot has a minimum size we did not know. Remember
@@ -1086,6 +1278,31 @@ bool StageMode::Adopt(HWND window)
         return false;
     }
 
+    // A window that was sent away by a monitor that is back (it was cut meanwhile, or minimized) goes to that monitor's stage
+    {
+        std::vector<std::wstring> keys;
+        for (const auto& s : m_stages)
+        {
+            keys.push_back(s.monitor.key);
+        }
+
+        const auto handle = reinterpret_cast<std::uintptr_t>(window);
+        const auto record = m_exiled.find(handle);
+        const std::wstring recorded = record != m_exiled.end() ? record->second : std::wstring();
+        const int home = StageMonitors::ReturnTarget(m_exiled, handle, keys);
+        if (home >= 0)
+        {
+            if (StageConfig::HasRoom(m_stages[static_cast<size_t>(home)].order.size(), Capacity(m_stages[static_cast<size_t>(home)])))
+            {
+                stage = &m_stages[static_cast<size_t>(home)];
+            }
+            else
+            {
+                m_exiled[handle] = recorded; // No room there yet
+            }
+        }
+    }
+
     Managed m;
     m.id = m_nextId++;
     m.window = window;
@@ -1131,6 +1348,11 @@ void StageMode::Release(int id, bool minimized, bool restore)
     if (m_drag && m_drag->id == id)
     {
         StopDrag(true); // The window is leaving the stage: the preview of its drag goes with it
+    }
+
+    if (!m_loosening)
+    {
+        m_loose.clear(); // Something left the stage: the windows that were cut for lack of room get another chance
     }
 
     const auto original = found->second.original;
@@ -1283,6 +1505,7 @@ void StageMode::Rehome(int id, MonitorStage& from, MonitorStage& to)
         return;
     }
 
+    m_exiled.erase(reinterpret_cast<std::uintptr_t>(m.window)); // The user's move (or a window that is simply elsewhere): it no longer goes back to the monitor that was unplugged
     from.layout->Remove(from.order, id); // The first window behind takes the freed place
     to.layout->Join(to.order, id, wasDocked); // The layout decides where: pair and master differ
     m.minW = m.minH = 0; // The minimum size depends on the DPI of the monitor: measured again
@@ -1326,6 +1549,12 @@ void StageMode::WindowAppeared(HWND window) noexcept
 {
     try
     {
+        if (m_active && window && GetWindow(window, GW_OWNER))
+        {
+            m_dialogAt = GetTickCount64() + DialogLookMillis; // An owned window (a dialog) came up: does a parked window own it?
+            Schedule(TickMillis);
+        }
+
         if (!m_active || !window || GetAncestor(window, GA_ROOT) != window || Find(window) || m_pending.size() >= MaxPending)
         {
             return;
@@ -1382,6 +1611,8 @@ void StageMode::WindowDestroyed(HWND window) noexcept
         StageDpi::Scope dpi;
         m_pending.erase(window);
         m_stuck.erase(window);
+        m_loose.erase(window);
+        m_exiled.erase(reinterpret_cast<std::uintptr_t>(window)); // Closed: nothing to send back
         m_logged.erase(window); // The handle may be reused
         if (!m_active)
         {
@@ -1698,6 +1929,8 @@ void StageMode::Enter() noexcept
         m_enterAt = 0;
         m_logged.clear();
         m_stuck.clear();
+        m_loose.clear();
+        m_exiled.clear();
 
         // What an earlier run that died left behind goes back first, and what can't (not responding) stays in the file
         m_orphans = RestoreEntries(StageState::Read(StateFilePath()));
@@ -1809,7 +2042,10 @@ void StageMode::Leave() noexcept
         }
 
         m_pending.clear();
-        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = m_rehomeAt = 0;
+        m_loose.clear();
+        m_exiled.clear();
+        m_remeasure = false;
+        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = m_rehomeAt = m_dialogAt = 0;
         m_scansLeft = 0;
 
         // Everything goes back; what can't (not responding) stays in the file
@@ -1904,6 +2140,25 @@ void StageMode::OnTimer() noexcept
         {
             m_relayoutAt = 0;
             RefreshMonitors();
+            m_loose.clear(); // The monitors changed: the windows cut for lack of room may fit now
+            if (m_remeasure)
+            {
+                // A monitor changed size or scale: what the windows said they need is in the old scale's pixels
+                m_remeasure = false;
+                for (auto& stage : m_stages)
+                {
+                    for (const int id : stage.order)
+                    {
+                        auto& m = m_windows.at(id);
+                        ResetMin(m);
+                        if (IsWindow(m.window) && !IsZoomed(m.window) && !IsIconic(m.window))
+                        {
+                            Measure(m, stage.monitor.work);
+                        }
+                    }
+                }
+            }
+
             for (auto& [_, m] : m_windows)
             {
                 m.grace = now + GraceMillis; // The moves below are ours: VerifyLanding must not take their transit for a minimum size
@@ -1911,6 +2166,8 @@ void StageMode::OnTimer() noexcept
 
             LandAll();
             m_rehomeAt = now + TickMillis; // Windows of a monitor that went away or came: see where each one is
+            m_scanAt = now + TickMillis; // Windows that were cut or waiting for a monitor are taken again (the cut list was cleared)
+            m_scansLeft = (std::max)(m_scansLeft, 1);
         }
 
         if (!m_pending.empty())
@@ -1922,6 +2179,7 @@ void StageMode::OnTimer() noexcept
         {
             m_pollAt = now + RehomePollMillis;
             RefreshStripCover();
+            PromoteDialogOwners(); // A modal dialog that came up with no event we heard
             if (m_stages.size() > 1 && !m_rehomeAt)
             {
                 m_rehomeAt = now; // Cheap: one monitor lookup per held window
@@ -1970,6 +2228,12 @@ void StageMode::OnTimer() noexcept
             }
         }
 
+        if (m_dialogAt && now >= m_dialogAt)
+        {
+            m_dialogAt = 0;
+            PromoteDialogOwners();
+        }
+
         if (m_verifyAt && now >= m_verifyAt)
         {
             m_verifyAt = 0;
@@ -1981,12 +2245,12 @@ void StageMode::OnTimer() noexcept
             RetryOrphans();
         }
 
-        if (m_active && !m_stages.empty() && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt)
+        if (m_active && !m_stages.empty() && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt && !m_dialogAt)
         {
             Schedule(static_cast<UINT>(RehomePollMillis)); // Idle: the slow poll is all that is left
         }
 
-        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || (m_active && m_settingsPending) || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
+        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || m_dialogAt || (m_active && m_settingsPending) || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
         {
             Schedule(TickMillis);
         }
@@ -2032,6 +2296,8 @@ void StageMode::NoteForeground(HWND foreground) noexcept
         if (m_active)
         {
             m_keyTracker.Note(ForegroundOf(foreground));
+            StageDpi::Scope dpi;
+            RefreshStripCover(); // A fullscreen app in front hides the strip of its monitor (and the next foreground brings it back)
         }
     }
     catch (...)
@@ -2172,6 +2438,7 @@ void StageMode::ApplyValues(const StageConfig::Values& global, const std::map<st
 {
     m_values = global;
     m_monitorMap = monitors;
+    m_loose.clear(); // Another layout or gap: the windows cut for lack of room may fit
     for (auto& stage : m_stages)
     {
         stage.values = StageConfig::Resolve(m_values, m_monitorMap, stage.monitor.key);
