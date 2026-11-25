@@ -61,6 +61,7 @@
     <ClInclude Include="StageDpi.h" />
     <ClInclude Include="StageLayouts.h" />
     <ClInclude Include="StageMode.h" />
+    <ClInclude Include="StageMouse.h" />
     <ClInclude Include="StagePark.h" />
     <ClInclude Include="StageState.h" />
     <ClInclude Include="DesktopScroll.h" />

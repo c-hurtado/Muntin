@@ -222,6 +222,7 @@ namespace
     // Stage mode: the timer of its runtime, and the one that starts it a moment after the desktop scroll has returned its windows
     constexpr UINT_PTR StageTimerId = 0x53544731;
     constexpr UINT_PTR StageEnterTimerId = 0x53544732;
+    constexpr UINT_PTR StageDragTimerId = 0x53544733; // live feedback of an edge drag, ~25 Hz
     constexpr UINT StageEnterDelayMillis = 700;
 
     // wparam of WM_PRIV_SNAP_HOTKEY; lparam is the key for the first two and the pixels for the last two
@@ -649,7 +650,7 @@ FancyZones::Run() noexcept
     });
     SyncCaptionButtonsTimer();
 
-    m_stageMode = std::make_unique<StageMode>(m_window, StageTimerId);
+    m_stageMode = std::make_unique<StageMode>(m_window, StageTimerId, StageDragTimerId);
     if (Arrange::IsStage())
     {
         SetTimer(m_window, StageEnterTimerId, StageEnterDelayMillis, nullptr); // Started in stage mode
@@ -1320,7 +1321,12 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_MOVESIZESTART)
         {
             auto hwnd = reinterpret_cast<HWND>(wparam);
-            // Stage mode: the drag is not dock-by-drag's (the stage handles it from Phase 5 on)
+            // Stage mode: the drag is not dock-by-drag's, the stage follows it (a held window; others are left alone)
+            if (m_stageMode && Arrange::IsStage())
+            {
+                m_stageMode->DragStart(hwnd);
+            }
+
             if (auto monitor = Arrange::IsStage() ? nullptr : MonitorFromPoint(ptScreen, MONITOR_DEFAULTTONULL))
             {
                 MoveSizeStart(hwnd, monitor);
@@ -1332,7 +1338,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             MoveSizeEnd();
             if (m_stageMode && Arrange::IsStage())
             {
-                m_stageMode->WindowMoved(reinterpret_cast<HWND>(wparam)); // May have been dropped on the other monitor
+                m_stageMode->DragEnd(reinterpret_cast<HWND>(wparam)); // Swap, shared-edge resize or snap back; else it may have been dropped on the other monitor
             }
         }
         else if (message == WM_PRIV_LOCATIONCHANGE)
@@ -1519,6 +1525,13 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             if (m_stageMode)
             {
                 m_stageMode->OnTimer();
+            }
+        }
+        else if (message == WM_TIMER && wparam == StageDragTimerId)
+        {
+            if (m_stageMode)
+            {
+                m_stageMode->OnDragTimer();
             }
         }
         else if (message == WM_TIMER && wparam == StageEnterTimerId)

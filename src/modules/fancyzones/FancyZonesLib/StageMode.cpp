@@ -41,6 +41,8 @@ namespace
     constexpr int MaxLearned = 3;
     constexpr ULONGLONG UnmaximizeMillis = 3000; // How long a window gets to leave the maximized state
     constexpr DWORD MinSizeTimeoutMillis = 150;
+    constexpr DWORD HitTestTimeoutMillis = 50;
+    constexpr UINT DragTickMillis = 40; // ~25 Hz live feedback while an edge is dragged
 
     using Rect = StageLayouts::LRect;
 
@@ -180,8 +182,8 @@ std::filesystem::path StageMode::StateFilePath()
     return PTSettingsHelper::get_module_save_folder_location(NonLocalizable::ModuleKey) + L"\\stage-state.txt";
 }
 
-StageMode::StageMode(HWND timerWindow, UINT_PTR timerId) :
-    m_timerWindow(timerWindow), m_timerId(timerId)
+StageMode::StageMode(HWND timerWindow, UINT_PTR timerId, UINT_PTR dragTimerId) :
+    m_timerWindow(timerWindow), m_timerId(timerId), m_dragTimerId(dragTimerId)
 {
 }
 
@@ -641,7 +643,7 @@ StageLayouts::Plan StageMode::ComputePlan(MonitorStage& stage)
     return stage.layout->Compute(input);
 }
 
-void StageMode::Land(MonitorStage& stage)
+void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
 {
     if (stage.order.empty())
     {
@@ -661,7 +663,7 @@ void StageMode::Land(MonitorStage& stage)
     const auto monitors = MonitorRects();
     bool waiting = false;
     std::vector<int> stuck;
-    const bool anyParked = std::any_of(plan.Items.begin(), plan.Items.end(), [](const StageLayouts::PlanItem& i) { return i.Role == StageLayouts::Role::Hidden; });
+    const bool anyParked = !dockedOnly && std::any_of(plan.Items.begin(), plan.Items.end(), [](const StageLayouts::PlanItem& i) { return i.Role == StageLayouts::Role::Hidden; });
     const auto dialogs = anyParked ? StageAdopt::DialogOwners(DialogCandidates()) : std::set<HWND>{};
 
     bool guarded = false;
@@ -674,6 +676,16 @@ void StageMode::Land(MonitorStage& stage)
         }
 
         auto& m = found->second;
+        if (m.id == skipId || (m_drag && m_drag->id == m.id))
+        {
+            continue; // The user has it by the mouse: the stage does not fight the drag, the drop puts it in its slot
+        }
+
+        if (dockedOnly && item.Role != StageLayouts::Role::Main && item.Role != StageLayouts::Role::Docked)
+        {
+            continue;
+        }
+
         if (!IsWindow(m.window) || IsHungAppWindow(m.window) || IsIconic(m.window))
         {
             continue; // Minimized windows are the user's: Windows tells us when they come back
@@ -714,7 +726,12 @@ void StageMode::Land(MonitorStage& stage)
         {
             m.guarded = false;
             const auto park = StagePark::Park(plan.Park, m.insets, stage.monitor.rect, monitors);
-            MoveTo(m.window, park.outer, !park.sliver, stage.monitor.handle);
+            RECT where{};
+            if (!(m.parked && GetWindowRect(m.window, &where) && ToRect(where).Same(park.outer)))
+            {
+                MoveTo(m.window, park.outer, !park.sliver, stage.monitor.handle); // Not again for a window that already sits there (HWND_BOTTOM is a z-order change)
+            }
+
             m.parked = true;
         }
     }
@@ -728,6 +745,11 @@ void StageMode::Land(MonitorStage& stage)
             LogDecision(found->second.window, L"released: it would not leave the maximized state");
             Release(id, false, true);
         }
+    }
+
+    if (dockedOnly)
+    {
+        return; // A drag preview: no timers, no verification; the drop lands the whole stage
     }
 
     const auto now = GetTickCount64();
@@ -929,6 +951,11 @@ void StageMode::Release(int id, bool minimized, bool restore)
     if (found == m_windows.end())
     {
         return;
+    }
+
+    if (m_drag && m_drag->id == id)
+    {
+        StopDrag(true); // The window is leaving the stage: the preview of its drag goes with it
     }
 
     const auto original = found->second.original;
@@ -1199,6 +1226,265 @@ void StageMode::WindowDestroyed(HWND window) noexcept
 
 #pragma endregion
 
+#pragma region mouse
+
+StageMode::MonitorStage* StageMode::StageOfId(int id, int* index)
+{
+    for (auto& stage : m_stages)
+    {
+        const auto it = std::find(stage.order.begin(), stage.order.end(), id);
+        if (it != stage.order.end())
+        {
+            if (index)
+            {
+                *index = static_cast<int>(it - stage.order.begin());
+            }
+
+            return &stage;
+        }
+    }
+
+    return nullptr;
+}
+
+// Ends the drag bookkeeping: the timer, and (restoreLayout) the cut and heights the preview changed
+void StageMode::StopDrag(bool restoreLayout)
+{
+    if (!m_drag)
+    {
+        return;
+    }
+
+    if (m_drag->timer && m_timerWindow && m_dragTimerId)
+    {
+        KillTimer(m_timerWindow, m_dragTimerId);
+    }
+
+    if (restoreLayout && m_drag->ctx)
+    {
+        if (auto* stage = StageOfId(m_drag->id))
+        {
+            StageMouse::Restore(*stage->layout, *m_drag->ctx);
+        }
+    }
+
+    m_drag.reset();
+}
+
+void StageMode::DragStart(HWND window) noexcept
+{
+    try
+    {
+        StageDpi::Scope dpi;
+        if (!m_active || !window)
+        {
+            return;
+        }
+
+        StopDrag(true); // Whatever was left of an earlier drag
+        const auto* m = Find(window);
+        int index = -1;
+        auto* stage = m ? StageOfId(m->id, &index) : nullptr;
+        RECT rect{};
+        if (!stage || !GetWindowRect(window, &rect))
+        {
+            return;
+        }
+
+        Drag drag;
+        drag.id = m->id;
+        drag.window = window;
+        drag.start = ToRect(rect);
+        // Border or not: asked of the window at the pointer. An app that does not answer quickly, or answers anything but a border, makes
+        // it a move: never an edge drag.
+        POINT cursor{};
+        DWORD_PTR hit = HTCLIENT;
+        if (GetCursorPos(&cursor) && SendMessageTimeoutW(window, WM_NCHITTEST, 0, MAKELPARAM(static_cast<WORD>(cursor.x), static_cast<WORD>(cursor.y)), SMTO_ABORTIFHUNG | SMTO_BLOCK, HitTestTimeoutMillis, &hit))
+        {
+            drag.intent = StageMouse::IntentFromHitTest(static_cast<long long>(static_cast<LRESULT>(hit)));
+        }
+
+        if (drag.intent == StageMouse::Intent::Size && !IsZoomed(window) && !IsIconic(window))
+        {
+            drag.ctx = StageMouse::Capture(*stage->layout, ComputePlan(*stage), index, static_cast<int>(stage->order.size()));
+        }
+
+        if (drag.ctx)
+        {
+            StageMouse::Take(*stage->layout, drag.applied);
+            if (m_timerWindow && m_dragTimerId)
+            {
+                SetTimer(m_timerWindow, m_dragTimerId, DragTickMillis, nullptr);
+                drag.timer = true;
+            }
+        }
+
+        m_drag = std::move(drag);
+    }
+    catch (...)
+    {
+        Logger::error(L"Stage: drag start failed");
+    }
+}
+
+// ~25 Hz while the button is down on an edge drag: the cut / stack heights follow the window's edge, the other windows are laid out
+// around them. Nothing is logged or allocated per tick (the layout is only touched when its numbers changed).
+void StageMode::OnDragTimer() noexcept
+{
+    try
+    {
+        StageDpi::Scope dpi;
+        if (!m_drag || !m_active || !m_drag->ctx)
+        {
+            if (m_timerWindow && m_dragTimerId)
+            {
+                KillTimer(m_timerWindow, m_dragTimerId);
+            }
+
+            return;
+        }
+
+        Drag& drag = *m_drag;
+        int index = -1;
+        auto* stage = StageOfId(drag.id, &index);
+        const bool buttonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        const bool valid = stage && StageMouse::StillValid(*drag.ctx, static_cast<int>(stage->order.size()), index);
+        if (!stage || !buttonDown || !IsWindow(drag.window) || !valid)
+        {
+            // The preview ends (the drop event, if the button went up, applies the final layout); a stage that changed under the drag
+            // invalidates the numbers taken at its start
+            if (stage)
+            {
+                StageMouse::Restore(*stage->layout, *drag.ctx);
+            }
+
+            KillTimer(m_timerWindow, m_dragTimerId);
+            drag.timer = false;
+            if (stage && !valid)
+            {
+                drag.ctx.reset();
+                Land(*stage);
+            }
+
+            return;
+        }
+
+        RECT rect{};
+        if (!GetWindowRect(drag.window, &rect))
+        {
+            return;
+        }
+
+        // A move is not a resize; going back to the start size (Esc included) puts the layout back as it was
+        const Rect now = ToRect(rect);
+        StageMouse::ResizeEdge(*stage->layout, *drag.ctx, drag.start, StageMouse::IsResize(drag.start, now) ? now : drag.start);
+        StageMouse::Take(*stage->layout, drag.probe);
+        if (drag.probe == drag.applied)
+        {
+            return;
+        }
+
+        std::swap(drag.applied, drag.probe);
+        Land(*stage, 0, true); // The dragged window is skipped; the other docked windows follow
+    }
+    catch (...)
+    {
+    }
+}
+
+void StageMode::DragEnd(HWND window) noexcept
+{
+    try
+    {
+        StageDpi::Scope dpi;
+        if (!m_active)
+        {
+            return;
+        }
+
+        if (!m_drag || m_drag->window != window)
+        {
+            WindowMoved(window); // Not a drag the stage followed: it may still have left for another monitor
+            return;
+        }
+
+        const Drag drag = *m_drag;
+        StopDrag(true); // Timer off, the preview's numbers back: the drop below decides from the numbers of the start
+        auto* m = Find(window);
+        auto* stage = m ? StageOfId(drag.id) : nullptr;
+        RECT rect{};
+        if (!stage || !IsWindow(window) || !GetWindowRect(window, &rect))
+        {
+            return;
+        }
+
+        const Rect now = ToRect(rect);
+        StageMouse::DropFacts facts;
+        facts.rectSameAsStart = now.Same(drag.start);
+        facts.intent = drag.intent;
+        if (!facts.rectSameAsStart)
+        {
+            facts.onOtherMonitor = StageFor(window) != stage;
+            facts.zoomed = IsZoomed(window) != FALSE;
+            facts.resized = StageMouse::IsResize(drag.start, now);
+            if (!facts.onOtherMonitor && !facts.zoomed)
+            {
+                if (facts.resized && drag.ctx)
+                {
+                    facts.edgeChanged = StageMouse::ResizeEdge(*stage->layout, *drag.ctx, drag.start, now);
+                }
+                else if (!facts.resized)
+                {
+                    POINT cursor{};
+                    GetCursorPos(&cursor);
+                    facts.targetId = StageMouse::HitTest(ComputePlan(*stage), stage->order, drag.id, cursor.x, cursor.y);
+                }
+            }
+        }
+
+        const auto plan = StageMouse::PlanDrop(facts);
+        if (plan.action != StageMouse::Drop::ResizeEdge && drag.ctx)
+        {
+            StageMouse::Restore(*stage->layout, *drag.ctx); // Nothing changes in the layout
+        }
+
+        if (plan.action != StageMouse::Drop::SnapBack || !facts.rectSameAsStart)
+        {
+            m->grace = GetTickCount64() + GraceMillis; // Our moves below are not a minimum size
+        }
+
+        switch (plan.action)
+        {
+        case StageMouse::Drop::ResizeEdge:
+            // Saved to settings.json; every monitor's stage lays out around the new numbers
+            Persist(StageConfig::Read(*stage->layout, m_values));
+            break;
+        case StageMouse::Drop::Swap:
+            StageMouse::Swap(stage->order, drag.id, facts.targetId);
+            Land(*stage);
+            break;
+        case StageMouse::Drop::Unmaximize:
+            Prepare(*m, stage->monitor.work); // Restored first, Land waits for that and places it
+            Land(*stage);
+            break;
+        case StageMouse::Drop::Rehome:
+            m->grace = 0; // The rehome scan must not wait for a grace of ours
+            Land(*stage, plan.skipDragged ? drag.id : 0); // The previewed neighbours go back; the window itself is the rehome's
+            ArmRehome();
+            break;
+        case StageMouse::Drop::SnapBack:
+            Land(*stage, plan.skipDragged ? drag.id : 0);
+            break;
+        }
+    }
+    catch (...)
+    {
+        Logger::error(L"Stage: drop failed");
+    }
+}
+
+#pragma endregion
+
 #pragma region mode
 
 void StageMode::Enter() noexcept
@@ -1327,6 +1613,7 @@ void StageMode::Leave() noexcept
         }
 
         m_active = false;
+        StopDrag(false);
         if (m_timerWindow)
         {
             KillTimer(m_timerWindow, m_timerId);

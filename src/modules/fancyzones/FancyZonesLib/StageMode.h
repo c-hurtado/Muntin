@@ -14,6 +14,7 @@
 #include <FancyZonesLib/StageAdopt.h>
 #include <FancyZonesLib/StageConfig.h>
 #include <FancyZonesLib/StageLayouts.h>
+#include <FancyZonesLib/StageMouse.h>
 #include <FancyZonesLib/StagePark.h>
 #include <FancyZonesLib/StageState.h>
 
@@ -29,7 +30,8 @@ class StageMode
 {
 public:
     // timerWindow / timerId: the window procedure that forwards WM_TIMER with that id to OnTimer
-    StageMode(HWND timerWindow, UINT_PTR timerId);
+    // dragTimerId: the same for the live feedback of a drag (OnDragTimer, ~25 Hz); 0 = no live feedback
+    StageMode(HWND timerWindow, UINT_PTR timerId, UINT_PTR dragTimerId = 0);
     ~StageMode(); // Leave()
 
     StageMode(const StageMode&) = delete;
@@ -47,6 +49,13 @@ public:
     void WindowDestroyed(HWND window) noexcept;
     void ScheduleRehome() noexcept; // something that may have moved a window happened (foreground change): a debounced look
     void WindowMoved(HWND window) noexcept; // end of a drag, or a location change: a held window may be on another monitor now
+    // Mouse (main thread). A held window is dragged: by its title bar (a move: dropped on another slot it swaps places) or by an edge it
+    // shares with a neighbour (the layout's cut / stack heights follow live, saved at the drop). Every other drop snaps back to the slot.
+    void DragStart(HWND window) noexcept; // MOVESIZESTART; returns quietly for a window the stage does not hold
+    void DragEnd(HWND window) noexcept; // MOVESIZEEND (Esc ends the drag too: the window is back at its start rect, so it snaps back)
+    void OnDragTimer() noexcept;
+    bool Dragging() const noexcept { return m_drag.has_value(); }
+
     void DisplayChanged() noexcept;
     void SettingsChanged() noexcept; // gap, margins, layout, cut or rows changed in settings.json
 
@@ -97,6 +106,21 @@ private:
 
     using Rect = StageLayouts::LRect;
 
+    // A drag of a held window in progress. Its window is not moved by the stage meanwhile (Land skips it).
+    struct Drag
+    {
+        int id{};
+        HWND window{};
+        Rect start; // GetWindowRect at the start
+        std::optional<StageMouse::DragCtx> ctx; // set when an edge drag is possible (started on a border)
+        StageMouse::Intent intent{ StageMouse::Intent::Move };
+        StageMouse::Snapshot applied; // the layout values the neighbours were last laid out with
+        StageMouse::Snapshot probe; // scratch for the tick (no allocation per tick once grown)
+        bool timer{};
+    };
+
+    void StopDrag(bool restoreLayout);
+    MonitorStage* StageOfId(int id, int* index = nullptr);
     void RefreshMonitors();
     MonitorStage* StageFor(HWND window);
     MonitorStage* StageOfRect(const Rect& monitorRect);
@@ -110,7 +134,9 @@ private:
     void Prepare(Managed& m, const Rect& work);
     void Measure(Managed& m, const Rect& work);
     StageLayouts::Plan ComputePlan(MonitorStage& stage);
-    void Land(MonitorStage& stage);
+    // skipId: a window the stage leaves where it is (a drop onto another monitor). dockedOnly: the live preview of an edge drag moves
+    // the docked windows only (no parking, no dialog scan, no minimum-size check).
+    void Land(MonitorStage& stage, int skipId = 0, bool dockedOnly = false);
     void LandAll();
     bool Adopt(HWND window);
     const wchar_t* Consider(HWND window, MonitorStage*& stage, std::optional<StageState::Entry>& original);
@@ -135,6 +161,8 @@ private:
 
     HWND m_timerWindow{};
     UINT_PTR m_timerId{};
+    UINT_PTR m_dragTimerId{};
+    std::optional<Drag> m_drag;
     bool m_active{};
     int m_nextId{ 1 };
     StageConfig::Values m_values;

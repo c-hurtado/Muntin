@@ -147,6 +147,7 @@ namespace StageLayouts
         virtual LRect CutSpan(const LRect& area, const LRect& zone, int n) const = 0; // the span the ratio refers to, for n visible windows (area = usable area, zone = strip zone)
         virtual std::vector<double> Rows() const = 0;              // master: the stack's height shares by position (empty = equal); other layouts: always empty
         virtual void SetRows(const std::vector<double>& value) = 0;
+        virtual void RowsInto(std::vector<double>& out) const { out = Rows(); } // Rows() without a new vector: reuses out's capacity (drag ticks)
         virtual bool MoveRow(const std::vector<int>& heights, int upper, int deltaPx) = 0; // master: the edge between stack windows upper and upper + 1 moves by deltaPx (positive = down); false = nothing changed
     };
 
@@ -416,6 +417,7 @@ namespace StageLayouts
         double Cut() const override { return Share; }
         void SetCut(double value) override { Share = (std::max)(0.15, (std::min)(0.85, value)); }
         std::vector<double> Rows() const override { return rows; }
+        void RowsInto(std::vector<double>& out) const override { out = rows; }
         void SetRows(const std::vector<double>& value) override { rows = value; }
         // The edge between stack windows upper and upper + 1 moves: the two share what they had, in the same total, each
         // keeping at least 8% of the stack. The shares start from the heights the windows really have (minimum sizes included).
@@ -427,16 +429,16 @@ namespace StageLayouts
             double tot = 0;
             for (int hh : heights)
                 tot += (std::max)(1, hh);
-            std::vector<double> r(kk);
-            for (int i = 0; i < kk; i++)
-                r[i] = (std::max)(1, heights[i]) / tot;
-            double d = deltaPx / tot, lo = 0.08, pair = r[upper] + r[upper + 1];
-            double nu = (std::max)(lo, (std::min)(pair - lo, r[upper] + d));
-            if (std::abs(nu - r[upper]) < 1e-9)
+            double d = deltaPx / tot, lo = 0.08;
+            double ru = (std::max)(1, heights[upper]) / tot, rl = (std::max)(1, heights[upper + 1]) / tot, pair = ru + rl;
+            double nu = (std::max)(lo, (std::min)(pair - lo, ru + d));
+            if (std::abs(nu - ru) < 1e-9)
                 return false;
-            r[upper] = nu;
-            r[upper + 1] = pair - nu;
-            rows = r;
+            rows.resize(kk); // no new vector per call once it has its size
+            for (int i = 0; i < kk; i++)
+                rows[i] = (std::max)(1, heights[i]) / tot;
+            rows[upper] = nu;
+            rows[upper + 1] = pair - nu;
             return true;
         }
         int Slots(int n) const override { return n <= 1 ? (std::max)(0, n) : 1 + (std::min)(n - 1, (std::max)(1, MaxStack)); }
