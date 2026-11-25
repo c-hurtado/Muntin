@@ -101,6 +101,7 @@ namespace NonLocalizable
     const wchar_t StagePairCutID[] = L"fancyzones_stagePairCut";
     const wchar_t StageMasterCutID[] = L"fancyzones_stageMasterCut";
     const wchar_t StageRowsID[] = L"fancyzones_stageRows";
+    const wchar_t StageMonitorsID[] = L"fancyzones_stageMonitors";
     const wchar_t DockGapID[] = L"fancyzones_dockGap";
     const wchar_t DockMarginLeftID[] = L"fancyzones_dockMarginLeft";
     const wchar_t DockMarginTopID[] = L"fancyzones_dockMarginTop";

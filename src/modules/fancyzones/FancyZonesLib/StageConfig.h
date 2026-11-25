@@ -4,6 +4,8 @@
 // layout objects. Nothing here reads or writes a file; StageMode saves what Changes() returns.
 
 #include <limits>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +34,107 @@ namespace StageConfig
     inline Values FromSettings(const Settings& s)
     {
         return { s.stageLayout, s.stagePairCut, s.stageMasterCut, s.stageRows };
+    }
+
+    // Cut and rows are per monitor; the layout choice stays global. The three global values are the default of a monitor without an entry.
+    //
+    // Monitor identity: the display device id and instance of the monitor (the 'DELA0B1' and '5&2d1c6b3a&0&UID4352' parts of its device
+    // path, the same pair the dock layouts and applied layouts key on). It survives a reboot, the display number Windows renumbers, the
+    // order the monitors are enumerated in, and unplug / replug into the same output. It changes when the monitor moves to another GPU
+    // output (a new instance), which then starts from the global values. Serial numbers (WMI) are left out on purpose: they would make
+    // every display change a slow, retrying lookup on the main thread. When no device id is known (the lookup failed, the id is only
+    // a \.\DISPLAYn name) the key is "@left,top" of the monitor rect, the best that is left.
+    inline std::wstring MonitorKey(const std::wstring& deviceId, const std::wstring& instanceId, int left, int top)
+    {
+        if (deviceId.empty() || instanceId.empty())
+        {
+            return L"@" + std::to_wstring(left) + L"," + std::to_wstring(top);
+        }
+
+        return deviceId + L"_" + instanceId;
+    }
+
+    // The key of a monitor from what the display lookup said. A monitor the lookup could not identify (not active yet after a wake or
+    // hot-plug) keeps the key it had for the same rect (previous, if it was a real one); failing that it gets the rect origin and
+    // resolved = false: the caller looks again shortly instead of saving under a key that will change.
+    struct KeyChoice
+    {
+        std::wstring key;
+        bool resolved{};
+    };
+
+    inline KeyChoice ChooseKey(const std::wstring& deviceId, const std::wstring& instanceId, int left, int top, const std::wstring& previous)
+    {
+        if (!deviceId.empty() && !instanceId.empty())
+        {
+            return { MonitorKey(deviceId, instanceId, left, top), true };
+        }
+
+        if (!previous.empty() && previous.front() != L'@')
+        {
+            return { previous, true };
+        }
+
+        return { MonitorKey(deviceId, instanceId, left, top), false };
+    }
+
+    // The values of the monitor: the global ones, the fields of its entry on top. An unknown or stale key is the global values.
+    inline Values Resolve(const Values& global, const std::map<std::wstring, StageMonitorValues>& monitors, const std::wstring& key)
+    {
+        Values values = global;
+        const auto entry = monitors.find(key);
+        if (entry != monitors.end())
+        {
+            if (entry->second.pairCut)
+            {
+                values.pairCut = (std::max)(150, (std::min)(850, *entry->second.pairCut));
+            }
+
+            if (entry->second.masterCut)
+            {
+                values.masterCut = (std::max)(150, (std::min)(850, *entry->second.masterCut));
+            }
+
+            if (entry->second.rows)
+            {
+                values.rows = *entry->second.rows;
+            }
+        }
+
+        return values;
+    }
+
+    // What differs between the values a monitor had and the ones it has now: the fields to save to its entry (empty: nothing to save)
+    inline StageMonitorValues MonitorChange(const Values& before, const Values& after)
+    {
+        StageMonitorValues change;
+        if (before.pairCut != after.pairCut)
+        {
+            change.pairCut = after.pairCut;
+        }
+
+        if (before.masterCut != after.masterCut)
+        {
+            change.masterCut = after.masterCut;
+        }
+
+        if (before.rows != after.rows)
+        {
+            change.rows = after.rows;
+        }
+
+        return change;
+    }
+
+    // The set fields of change go into the entry of key; the other fields and monitors stay (what SaveStageMonitor does in the file)
+    inline void Merge(std::map<std::wstring, StageMonitorValues>& monitors, const std::wstring& key, const StageMonitorValues& change)
+    {
+        if (change.Empty())
+        {
+            return;
+        }
+
+        monitors[key].Overlay(change);
     }
 
     inline std::string Narrow(const std::wstring& name)
@@ -101,7 +204,11 @@ namespace StageConfig
             (layout.Name() == "pair" ? base.pairCut : base.masterCut) = ToPermille(layout.Cut());
         }
 
-        base.rows = Arrange::FormatRows(layout.Rows());
+        if (layout.Name() == "master")
+        {
+            base.rows = Arrange::FormatRows(layout.Rows()); // Only the master layout owns rows: a pair / stage drag leaves them as they are
+        }
+
         return base;
     }
 

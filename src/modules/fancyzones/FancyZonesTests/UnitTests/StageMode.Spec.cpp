@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <set>
 
 #include <FancyZonesLib/Arrange.h>
@@ -411,6 +412,220 @@ namespace FancyZonesUnitTests
             // Phase 3 draws no strip: whatever is configured, the layout that runs is the one without one
             values.layout = L"stage";
             Assert::AreEqual(std::string("master"), StageConfig::MakeLayout(values)->Name());
+        }
+
+        TEST_METHOD (MonitorKeyUsesDeviceAndInstanceElseOrigin)
+        {
+            Assert::AreEqual(std::wstring(L"DELA0B1_5&2d1c&0&UID4352"), StageConfig::MonitorKey(L"DELA0B1", L"5&2d1c&0&UID4352", 1920, 0));
+            Assert::AreEqual(std::wstring(L"@1920,-200"), StageConfig::MonitorKey(L"DELA0B1", L"", 1920, -200), L"no instance: the rect origin");
+            Assert::AreEqual(std::wstring(L"@0,0"), StageConfig::MonitorKey(L"", L"", 0, 0));
+            Assert::AreNotEqual(StageConfig::MonitorKey(L"DELA0B1", L"UID1", 0, 0), StageConfig::MonitorKey(L"DELA0B1", L"UID2", 0, 0), L"two monitors of one model");
+        }
+
+        TEST_METHOD (MonitorWithoutEntryFollowsGlobalValues)
+        {
+            StageConfig::Values global;
+            global.pairCut = 420;
+            global.masterCut = 700;
+            global.rows = L"500,500";
+            std::map<std::wstring, StageMonitorValues> monitors;
+            Assert::IsTrue(StageConfig::Resolve(global, monitors, L"A") == global);
+
+            monitors[L"A"].masterCut = 300;
+            Assert::IsTrue(StageConfig::Resolve(global, monitors, L"B") == global, L"unknown / stale id: global");
+            const auto a = StageConfig::Resolve(global, monitors, L"A");
+            Assert::AreEqual(300, a.masterCut);
+            Assert::AreEqual(420, a.pairCut, L"a field that is not set follows the global one");
+            Assert::AreEqual(std::wstring(L"500,500"), a.rows);
+
+            monitors[L"A"].rows = L"";
+            monitors[L"A"].pairCut = 99999;
+            const auto clamped = StageConfig::Resolve(global, monitors, L"A");
+            Assert::AreEqual(std::wstring(), clamped.rows, L"an empty rows entry means equal heights, not the global rows");
+            Assert::AreEqual(850, clamped.pairCut);
+
+            global.masterCut = 650;
+            monitors[L"A"].masterCut.reset();
+            Assert::AreEqual(650, StageConfig::Resolve(global, monitors, L"A").masterCut, L"global changes reach monitors that do not override");
+        }
+
+        TEST_METHOD (ResizingOneMonitorLeavesTheOtherAlone)
+        {
+            const StageConfig::Values global;
+            std::map<std::wstring, StageMonitorValues> monitors;
+            const auto one = StageConfig::Resolve(global, monitors, L"ONE");
+            const auto two = StageConfig::Resolve(global, monitors, L"TWO");
+            auto layoutOne = StageConfig::MakeLayout(one);
+            auto layoutTwo = StageConfig::MakeLayout(two);
+
+            layoutTwo->SetCut(0.4);
+            layoutTwo->SetRows({ 0.3, 0.7 });
+            const auto after = StageConfig::Read(*layoutTwo, two);
+            const auto change = StageConfig::MonitorChange(two, after);
+            Assert::IsFalse(change.Empty());
+            Assert::IsFalse(change.pairCut.has_value(), L"only what changed is saved");
+            Assert::AreEqual(400, *change.masterCut);
+            Assert::AreEqual(std::wstring(L"300,700"), *change.rows);
+            StageConfig::Merge(monitors, L"TWO", change);
+
+            Assert::AreEqual(size_t{ 1 }, monitors.size());
+            Assert::IsTrue(StageConfig::Resolve(global, monitors, L"ONE") == one, L"monitor one is untouched");
+            Assert::AreEqual(0.6, layoutOne->Cut(), 1e-9);
+            Assert::AreEqual(400, StageConfig::Resolve(global, monitors, L"TWO").masterCut);
+            Assert::IsTrue(StageConfig::MonitorChange(after, after).Empty(), L"nothing changed, nothing saved");
+
+            StageMonitorValues second;
+            second.masterCut = 500;
+            StageConfig::Merge(monitors, L"TWO", second);
+            Assert::AreEqual(std::wstring(L"300,700"), *monitors[L"TWO"].rows, L"merge keeps the other fields");
+            Assert::AreEqual(500, *monitors[L"TWO"].masterCut);
+            StageConfig::Merge(monitors, L"THREE", StageMonitorValues{});
+            Assert::AreEqual(size_t{ 1 }, monitors.size(), L"an empty change adds no entry");
+        }
+
+        TEST_METHOD (StageMonitorsSaveAndLoadInATempFile)
+        {
+            TempFolder temp;
+            const auto file = (temp.path / L"settings.json").wstring();
+            StageMonitorValues first;
+            first.masterCut = 400;
+            first.rows = L"300,700";
+            Assert::IsTrue(FancyZonesSettings::SaveStageMonitor(L"DELA0B1_UID1", first, file));
+            StageMonitorValues other;
+            other.pairCut = 300;
+            Assert::IsTrue(FancyZonesSettings::SaveStageMonitor(L"@1920,0", other, file));
+            StageMonitorValues more;
+            more.masterCut = 450;
+            Assert::IsTrue(FancyZonesSettings::SaveStageMonitor(L"DELA0B1_UID1", more, file), L"merged into the entry already there");
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::StageMasterCutID, json::value(555), file), L"other settings keep being written");
+
+            const auto read = json::from_file(file);
+            Assert::IsTrue(read.has_value());
+            const auto properties = read->GetNamedObject(L"properties");
+            Assert::AreEqual(555.0, properties.GetNamedObject(NonLocalizable::StageMasterCutID).GetNamedNumber(L"value"), L"the global value is a field of its own");
+            const auto monitors = FancyZonesSettings::ParseStageMonitors(properties.GetNamedObject(NonLocalizable::StageMonitorsID).GetNamedObject(L"value"));
+            Assert::AreEqual(size_t{ 2 }, monitors.size());
+            Assert::AreEqual(450, *monitors.at(L"DELA0B1_UID1").masterCut);
+            Assert::AreEqual(std::wstring(L"300,700"), *monitors.at(L"DELA0B1_UID1").rows);
+            Assert::IsFalse(monitors.at(L"DELA0B1_UID1").pairCut.has_value());
+            Assert::AreEqual(300, *monitors.at(L"@1920,0").pairCut);
+            Assert::IsFalse(monitors.at(L"@1920,0").masterCut.has_value());
+        }
+
+        TEST_METHOD (LoadSettingsOldFormatAndMissingKeyClear)
+        {
+            // The real LoadSettings, on the unit-test settings file (test-settings.json, never settings.json), removed at the end
+            const auto file = FancyZonesSettings::GetSettingsFileName();
+            std::error_code ignored;
+            std::filesystem::remove(file, ignored);
+
+            StageMonitorValues entry;
+            entry.masterCut = 300;
+            Assert::IsTrue(FancyZonesSettings::SaveStageMonitor(L"DELA0B1_UID1", entry, file));
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(size_t{ 1 }, FancyZonesSettings::settings().stageMonitors.size());
+            Assert::AreEqual(300, *FancyZonesSettings::settings().stageMonitors.at(L"DELA0B1_UID1").masterCut);
+
+            // The old format: global values only, no monitor map. Loading it clears what an earlier load had.
+            std::filesystem::remove(file, ignored);
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::StagePairCutID, json::value(420), file));
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::StageMasterCutID, json::value(700), file));
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::StageRowsID, json::value(L"500,500"), file));
+            FancyZonesSettings::instance().LoadSettings();
+            const auto& s = FancyZonesSettings::settings();
+            Assert::IsTrue(s.stageMonitors.empty(), L"the missing key clears the map");
+            Assert::AreEqual(420, s.stagePairCut);
+            Assert::AreEqual(700, s.stageMasterCut);
+            const auto values = StageConfig::Resolve(StageConfig::FromSettings(s), s.stageMonitors, L"DELA0B1_UID1");
+            Assert::IsTrue(values == StageConfig::FromSettings(s), L"every monitor follows the old global values");
+            Assert::AreEqual(0.7, StageConfig::MakeLayout(values)->Cut(), 1e-9);
+
+            // Huge numbers clamp to the limit instead of an undefined cast
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::StageMasterCutID, json::value(3e9), file));
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::StagePairCutID, json::value(-3e9), file));
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(850, FancyZonesSettings::settings().stageMasterCut);
+            Assert::AreEqual(150, FancyZonesSettings::settings().stagePairCut);
+            std::filesystem::remove(file, ignored);
+        }
+
+        TEST_METHOD (SaveStageMonitorNeverWritesFromAnUnreadableFile)
+        {
+            TempFolder temp;
+            const auto file = temp.path / L"settings.json";
+            const std::string broken = "{ \"properties\": { \"fancyzones_stageMonitors\": ";
+            {
+                std::ofstream out(file, std::ios::binary);
+                out << broken;
+            }
+
+            StageMonitorValues change;
+            change.masterCut = 400;
+            Assert::IsFalse(FancyZonesSettings::SaveStageMonitor(L"A", change, file.wstring()), L"the file exists but can't be read");
+            std::ifstream in(file, std::ios::binary);
+            const std::string after((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            Assert::AreEqual(broken, after, L"left as it was");
+
+            Assert::IsTrue(FancyZonesSettings::SaveStageMonitor(L"A", change, (temp.path / L"none.json").wstring()), L"no file at all is fine");
+        }
+
+        TEST_METHOD (OnlyTheMasterLayoutOwnsRows)
+        {
+            StageConfig::Values pair;
+            pair.layout = L"pair";
+            pair.rows = L"400,600";
+            auto layout = StageLayouts::MakePair();
+            layout->SetCut(0.3);
+            const auto after = StageConfig::Read(*layout, pair);
+            Assert::AreEqual(300, after.pairCut);
+            Assert::AreEqual(std::wstring(L"400,600"), after.rows, L"a pair drag keeps the rows as they were");
+            Assert::IsFalse(StageConfig::MonitorChange(pair, after).rows.has_value(), L"and never saves rows");
+
+            StageConfig::Values master;
+            master.rows = L"400,600";
+            auto masterLayout = StageConfig::MakeLayout(master);
+            masterLayout->SetRows({ 0.5, 0.5 });
+            Assert::AreEqual(std::wstring(L"500,500"), StageConfig::Read(*masterLayout, master).rows);
+        }
+
+        TEST_METHOD (UnidentifiedMonitorKeepsItsKeyOrAsksForAnotherLook)
+        {
+            const auto real = StageConfig::ChooseKey(L"DELA0B1", L"UID1", 0, 0, L"");
+            Assert::IsTrue(real.resolved);
+            Assert::AreEqual(std::wstring(L"DELA0B1_UID1"), real.key);
+
+            const auto kept = StageConfig::ChooseKey(L"\\\\.\\DISPLAY2", L"", 1920, 0, L"DELA0B1_UID1");
+            Assert::IsTrue(kept.resolved, L"the lookup failed: the key it had for that rect stays");
+            Assert::AreEqual(std::wstring(L"DELA0B1_UID1"), kept.key);
+
+            const auto fresh = StageConfig::ChooseKey(L"\\\\.\\DISPLAY2", L"", 1920, 0, L"");
+            Assert::IsFalse(fresh.resolved, L"nothing known: look again shortly");
+            Assert::AreEqual(std::wstring(L"@1920,0"), fresh.key);
+
+            const auto stillFallback = StageConfig::ChooseKey(L"", L"", 1920, 0, L"@1920,0");
+            Assert::IsFalse(stillFallback.resolved, L"a previous fallback key is not trusted");
+            Assert::IsTrue(StageConfig::ChooseKey(L"DELA0B1", L"UID9", 1920, 0, L"@1920,0").resolved, L"it upgrades once the lookup works");
+        }
+
+        TEST_METHOD (JsonNumbersClampWithoutUndefinedCasts)
+        {
+            Assert::AreEqual(850, ClampJsonNumber(3e9, 150, 850));
+            Assert::AreEqual(150, ClampJsonNumber(-3e9, 150, 850));
+            Assert::AreEqual(150, ClampJsonNumber(std::numeric_limits<double>::quiet_NaN(), 150, 850));
+            Assert::AreEqual(850, ClampJsonNumber(std::numeric_limits<double>::infinity(), 150, 850));
+            Assert::AreEqual(500, ClampJsonNumber(500.9, 150, 850));
+            const auto parsed = FancyZonesSettings::ParseStageMonitors(json::JsonObject::Parse(L"{\"A\":{\"masterCut\":3000000000,\"pairCut\":-3000000000}}"));
+            Assert::AreEqual(850, *parsed.at(L"A").masterCut);
+            Assert::AreEqual(150, *parsed.at(L"A").pairCut);
+        }
+
+        TEST_METHOD (BadStageMonitorEntriesAreSkipped)
+        {
+            const auto parsed = FancyZonesSettings::ParseStageMonitors(json::JsonObject::Parse(
+                L"{\"A\":{\"masterCut\":5000,\"rows\":\"400,600\"},\"B\":42,\"C\":{},\"D\":{\"pairCut\":\"x\"}}"));
+            Assert::AreEqual(size_t{ 1 }, parsed.size());
+            Assert::AreEqual(850, *parsed.at(L"A").masterCut, L"clamped like the global value");
+            Assert::AreEqual(std::wstring(L"400,600"), *parsed.at(L"A").rows);
         }
 
         TEST_METHOD (VerifyNeedsMoreThanTheToleranceSeenTwice)

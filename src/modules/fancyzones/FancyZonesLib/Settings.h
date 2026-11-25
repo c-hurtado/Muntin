@@ -1,5 +1,8 @@
 #pragma once
 
+#include <map>
+#include <optional>
+#include <string>
 #include <unordered_set>
 
 #include <common/SettingsAPI/settings_helpers.h>
@@ -7,6 +10,47 @@
 
 #include <FancyZonesLib/ModuleConstants.h>
 #include <FancyZonesLib/SettingsConstants.h>
+
+// Stage mode: what one monitor overrides of the global stagePairCut / stageMasterCut / stageRows. A field that is not set follows the global value.
+struct StageMonitorValues
+{
+    std::optional<int> pairCut; // thousandths, 150 .. 850
+    std::optional<int> masterCut;
+    std::optional<std::wstring> rows;
+
+    bool Empty() const noexcept { return !pairCut && !masterCut && !rows; }
+    // The set fields of change replace the ones here; the others stay
+    void Overlay(const StageMonitorValues& change)
+    {
+        if (change.pairCut)
+        {
+            pairCut = change.pairCut;
+        }
+
+        if (change.masterCut)
+        {
+            masterCut = change.masterCut;
+        }
+
+        if (change.rows)
+        {
+            rows = change.rows;
+        }
+    }
+
+    bool operator==(const StageMonitorValues&) const = default;
+};
+
+// A JSON number as an int in [lo, hi]: huge values clamp to the nearest limit, NaN to lo (a bare static_cast<int> of those is undefined)
+inline int ClampJsonNumber(double value, int lo, int hi) noexcept
+{
+    if (!(value >= lo))
+    {
+        return lo;
+    }
+
+    return value > hi ? hi : static_cast<int>(value);
+}
 
 class SettingsObserver;
 class FileWatcher;
@@ -81,6 +125,8 @@ struct Settings
     int stagePairCut = 500; // Where the pair layout's vertical edge sits, in thousandths of its span
     int stageMasterCut = 600; // The same for the master layout
     std::wstring stageRows = L""; // Master layout: height shares of the stack, in thousandths, comma separated. Empty: equal heights.
+    // Per monitor cut and rows of stage mode, keyed by StageConfig::MonitorKey. A monitor without an entry uses the three values above.
+    std::map<std::wstring, StageMonitorValues> stageMonitors;
     int dockGap = 8; // Pixels left between docked windows
     int dockMarginLeft = 0; // Pixels kept free between docked windows and each work area edge
     int dockMarginTop = 0;
@@ -140,6 +186,13 @@ public:
     // Writes one setting to the settings file, keeping the others. id: one of the names in SettingsConstants.h.
     // False when the file is there but can't be read: it is left as it is.
     static bool SaveValue(const wchar_t* id, const json::JsonValue& value, const std::wstring& file = GetSettingsFileName());
+    static bool SaveValue(json::JsonObject settings, const wchar_t* id, const json::JsonValue& value, const std::wstring& file); // settings: what was read from file
+
+    // The stage monitor entries of a settings "properties" object (the "fancyzones_stageMonitors" value); bad entries and fields are skipped
+    static std::map<std::wstring, StageMonitorValues> ParseStageMonitors(const json::JsonObject& monitors);
+    static json::JsonObject StageMonitorJson(const StageMonitorValues& values);
+    // Writes the set fields of change into the entry of one monitor, keeping the other fields and monitors of the file. False as SaveValue.
+    static bool SaveStageMonitor(const std::wstring& key, const StageMonitorValues& change, const std::wstring& file = GetSettingsFileName());
 
 private:
     FancyZonesSettings();

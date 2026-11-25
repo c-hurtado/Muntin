@@ -14,6 +14,7 @@
 #include <FancyZonesLib/Arrange.h>
 #include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/ModuleConstants.h>
+#include <FancyZonesLib/MonitorUtils.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/StageDpi.h>
 #include <FancyZonesLib/SettingsConstants.h>
@@ -365,10 +366,37 @@ void StageMode::RefreshMonitors()
         return; // Keep what is known: a transient state of the display change
     }
 
+    // Stable monitor identity (no WMI, no retries): the device id and instance, else the rect origin
+    std::map<HMONITOR, std::pair<std::wstring, std::wstring>> devices;
+    for (const auto& display : MonitorUtils::Display::GetDisplays().second)
+    {
+        devices[display.monitor] = { display.deviceId.id, display.deviceId.instanceId };
+    }
+
+    const auto previous = m_monitors;
     m_monitors.clear();
+    bool unresolved = false;
     for (const auto& m : monitors)
     {
-        m_monitors.push_back({ m.handle, m.rect, m.work });
+        const auto device = devices.find(m.handle);
+        const auto& [id, instance] = device != devices.end() ? device->second : std::pair<std::wstring, std::wstring>{};
+        const auto before = std::find_if(previous.begin(), previous.end(), [&](const MonitorInfo& p) { return p.rect.Same(m.rect); });
+        const auto choice = StageConfig::ChooseKey(id, instance, m.rect.L, m.rect.T, before != previous.end() ? before->key : std::wstring());
+        unresolved |= !choice.resolved;
+        m_monitors.push_back({ m.handle, m.rect, m.work, choice.key });
+    }
+
+    // A monitor that is not identified yet (waking up): look again shortly, a few times, rather than save its cut under a guessed key
+    constexpr int MaxKeyRetries = 8;
+    if (unresolved && m_keyRetries < MaxKeyRetries)
+    {
+        m_keyRetries++;
+        m_relayoutAt = GetTickCount64() + RelayoutDelayMillis;
+        Schedule(RelayoutDelayMillis);
+    }
+    else if (!unresolved)
+    {
+        m_keyRetries = 0;
     }
 
     std::vector<MonitorStage> next;
@@ -377,15 +405,23 @@ void StageMode::RefreshMonitors()
         const auto old = std::find_if(m_stages.begin(), m_stages.end(), [&](const MonitorStage& s) { return s.monitor.rect.Same(monitor.rect); });
         if (old != m_stages.end())
         {
+            const bool sameMonitor = old->monitor.key == monitor.key;
             next.push_back(std::move(*old));
             m_stages.erase(old);
             next.back().monitor = monitor;
+            if (!sameMonitor)
+            {
+                // Another monitor took this place: it has its own cut and rows
+                next.back().values = StageConfig::Resolve(m_values, m_monitorMap, monitor.key);
+                next.back().layout = StageConfig::MakeLayout(next.back().values);
+            }
         }
         else
         {
             MonitorStage stage;
             stage.monitor = monitor;
-            stage.layout = StageConfig::MakeLayout(m_values);
+            stage.values = StageConfig::Resolve(m_values, m_monitorMap, monitor.key);
+            stage.layout = StageConfig::MakeLayout(stage.values);
             next.push_back(std::move(stage));
         }
     }
@@ -1456,8 +1492,9 @@ void StageMode::DragEnd(HWND window) noexcept
         switch (plan.action)
         {
         case StageMouse::Drop::ResizeEdge:
-            // Saved to settings.json; every monitor's stage lays out around the new numbers
-            Persist(StageConfig::Read(*stage->layout, m_values));
+            // Saved to settings.json under this monitor only; the other monitors' stages are not touched
+            PersistMonitor(*stage);
+            Land(*stage);
             break;
         case StageMouse::Drop::Swap:
             StageMouse::Swap(stage->order, drag.id, facts.targetId);
@@ -1528,6 +1565,8 @@ void StageMode::Enter() noexcept
         m_orphanTries = 0;
         m_orphanAt = GetTickCount64() + OrphanMillis; // Not stale: they were just tried
         m_values = StageConfig::FromSettings(FancyZonesSettings::settings());
+        m_monitorMap = FancyZonesSettings::settings().stageMonitors;
+        m_settingsPending = false;
         m_stages.clear();
         RefreshMonitors();
         if (m_stages.empty())
@@ -1665,6 +1704,12 @@ void StageMode::OnTimer() noexcept
         }
 
         const auto now = GetTickCount64();
+        if (m_active && m_settingsPending && !m_drag)
+        {
+            m_settingsPending = false;
+            SettingsChanged();
+        }
+
         if (!m_active)
         {
             if (m_enterAt && now >= m_enterAt)
@@ -1791,7 +1836,7 @@ void StageMode::OnTimer() noexcept
             Schedule(static_cast<UINT>(RehomePollMillis)); // Idle: the slow poll is all that is left
         }
 
-        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
+        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || (m_active && m_settingsPending) || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
         {
             Schedule(TickMillis);
         }
@@ -1973,12 +2018,14 @@ void StageMode::KeyAction(StageKeys::Action action, HWND target) noexcept
 
 #pragma region settings
 
-void StageMode::ApplyValues(const StageConfig::Values& values)
+void StageMode::ApplyValues(const StageConfig::Values& global, const std::map<std::wstring, StageMonitorValues>& monitors)
 {
-    m_values = values;
+    m_values = global;
+    m_monitorMap = monitors;
     for (auto& stage : m_stages)
     {
-        stage.layout = StageConfig::MakeLayout(m_values);
+        stage.values = StageConfig::Resolve(m_values, m_monitorMap, stage.monitor.key);
+        stage.layout = StageConfig::MakeLayout(stage.values);
     }
 
     LandAll();
@@ -1989,10 +2036,21 @@ void StageMode::SettingsChanged() noexcept
     try
     {
         StageDpi::Scope dpi;
-        if (m_active)
+        if (!m_active)
         {
-            ApplyValues(StageConfig::FromSettings(FancyZonesSettings::settings())); // Also the gap and the margins
+            return;
         }
+
+        if (m_drag)
+        {
+            // A reload must not replace the layout objects the drag is moving: it is applied once the drag ended
+            m_settingsPending = true;
+            Schedule(TickMillis);
+            return;
+        }
+
+        const auto& settings = FancyZonesSettings::settings();
+        ApplyValues(StageConfig::FromSettings(settings), settings.stageMonitors); // Also the gap and the margins
     }
     catch (...)
     {
@@ -2011,7 +2069,26 @@ void StageMode::Persist(const StageConfig::Values& after)
         }
     }
 
-    ApplyValues(after);
+    ApplyValues(after, m_monitorMap);
+}
+
+// The cut or rows the user just dragged on one monitor: only its entry in settings.json changes, only its stage keeps the new values
+void StageMode::PersistMonitor(MonitorStage& stage)
+{
+    const auto after = StageConfig::Read(*stage.layout, stage.values);
+    const auto change = StageConfig::MonitorChange(stage.values, after);
+    if (change.Empty())
+    {
+        return;
+    }
+
+    if (!FancyZonesSettings::SaveStageMonitor(stage.monitor.key, change))
+    {
+        Logger::warn(L"Stage: a monitor's cut could not be saved");
+    }
+
+    StageConfig::Merge(m_monitorMap, stage.monitor.key, change);
+    stage.values = after;
 }
 
 void StageMode::SetLayoutName(const std::wstring& name) noexcept
@@ -2030,42 +2107,6 @@ void StageMode::SetLayoutName(const std::wstring& name) noexcept
     catch (...)
     {
         Logger::error(L"Stage: layout change failed");
-    }
-}
-
-void StageMode::SetMasterCut(double ratio) noexcept
-{
-    try
-    {
-        StageDpi::Scope dpi;
-        if (m_active)
-        {
-            auto after = m_values;
-            after.masterCut = StageConfig::ToPermille(ratio);
-            Persist(after);
-        }
-    }
-    catch (...)
-    {
-        Logger::error(L"Stage: cut change failed");
-    }
-}
-
-void StageMode::SetRows(const std::vector<double>& rows) noexcept
-{
-    try
-    {
-        StageDpi::Scope dpi;
-        if (m_active)
-        {
-            auto after = m_values;
-            after.rows = Arrange::FormatRows(rows);
-            Persist(after);
-        }
-    }
-    catch (...)
-    {
-        Logger::error(L"Stage: rows change failed");
     }
 }
 

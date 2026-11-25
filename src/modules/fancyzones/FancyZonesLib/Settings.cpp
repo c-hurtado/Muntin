@@ -210,19 +210,46 @@ void FancyZonesSettings::LoadSettings()
             }
         }
 
-        if (auto val = values.get_int_value(NonLocalizable::StagePairCutID))
+        // Read from the parsed file, not through get_int_value: its int cast is undefined for a huge number
+        const auto stageNumber = [&](const wchar_t* id) -> std::optional<int> {
+            if (json::has(*jsonOpt, L"properties", json::JsonValueType::Object))
+            {
+                const auto properties = jsonOpt->GetNamedObject(L"properties");
+                if (json::has(properties, id, json::JsonValueType::Object))
+                {
+                    const auto property = properties.GetNamedObject(id);
+                    if (json::has(property, L"value", json::JsonValueType::Number))
+                    {
+                        return ClampJsonNumber(property.GetNamedNumber(L"value"), 150, 850);
+                    }
+                }
+            }
+
+            return std::nullopt;
+        };
+
+        if (const auto val = stageNumber(NonLocalizable::StagePairCutID))
         {
-            m_settings.stagePairCut = std::clamp(*val, 150, 850);
+            m_settings.stagePairCut = *val;
         }
 
-        if (auto val = values.get_int_value(NonLocalizable::StageMasterCutID))
+        if (const auto val = stageNumber(NonLocalizable::StageMasterCutID))
         {
-            m_settings.stageMasterCut = std::clamp(*val, 150, 850);
+            m_settings.stageMasterCut = *val;
         }
 
         if (auto val = values.get_string_value(NonLocalizable::StageRowsID))
         {
             m_settings.stageRows = *val;
+        }
+
+        if (const auto val = values.get_json(NonLocalizable::StageMonitorsID))
+        {
+            m_settings.stageMonitors = ParseStageMonitors(*val);
+        }
+        else
+        {
+            m_settings.stageMonitors.clear(); // Removed by hand: every monitor follows the global values again
         }
 
         if (auto val = values.get_int_value(NonLocalizable::DockGapID))
@@ -419,7 +446,11 @@ bool FancyZonesSettings::SaveValue(const wchar_t* id, const json::JsonValue& val
         return false;
     }
 
-    auto settings = read.value_or(json::JsonObject{});
+    return SaveValue(read.value_or(json::JsonObject{}), id, value, file);
+}
+
+bool FancyZonesSettings::SaveValue(json::JsonObject settings, const wchar_t* id, const json::JsonValue& value, const std::wstring& file)
+{
     if (!settings.HasKey(L"properties"))
     {
         settings.SetNamedValue(L"properties", json::JsonObject{});
@@ -439,6 +470,97 @@ bool FancyZonesSettings::SaveValue(const wchar_t* id, const json::JsonValue& val
     // The file watcher reloads the settings
     json::to_file(file, settings);
     return true;
+}
+
+std::map<std::wstring, StageMonitorValues> FancyZonesSettings::ParseStageMonitors(const json::JsonObject& monitors)
+{
+    std::map<std::wstring, StageMonitorValues> result;
+    for (const auto& pair : monitors)
+    {
+        if (pair.Value().ValueType() != json::JsonValueType::Object)
+        {
+            continue;
+        }
+
+        const auto entry = pair.Value().GetObjectW();
+        StageMonitorValues values;
+        if (json::has(entry, L"pairCut", json::JsonValueType::Number))
+        {
+            values.pairCut = ClampJsonNumber(entry.GetNamedNumber(L"pairCut"), 150, 850);
+        }
+
+        if (json::has(entry, L"masterCut", json::JsonValueType::Number))
+        {
+            values.masterCut = ClampJsonNumber(entry.GetNamedNumber(L"masterCut"), 150, 850);
+        }
+
+        if (json::has(entry, L"rows", json::JsonValueType::String))
+        {
+            values.rows = entry.GetNamedString(L"rows").c_str();
+        }
+
+        if (!values.Empty())
+        {
+            result[pair.Key().c_str()] = std::move(values);
+        }
+    }
+
+    return result;
+}
+
+json::JsonObject FancyZonesSettings::StageMonitorJson(const StageMonitorValues& values)
+{
+    json::JsonObject entry;
+    if (values.pairCut)
+    {
+        entry.SetNamedValue(L"pairCut", json::value(*values.pairCut));
+    }
+
+    if (values.masterCut)
+    {
+        entry.SetNamedValue(L"masterCut", json::value(*values.masterCut));
+    }
+
+    if (values.rows)
+    {
+        entry.SetNamedValue(L"rows", json::value(*values.rows));
+    }
+
+    return entry;
+}
+
+bool FancyZonesSettings::SaveStageMonitor(const std::wstring& key, const StageMonitorValues& change, const std::wstring& file)
+{
+    // Read the entry as the file has it now, not as the last load saw it: two saves close together must not undo each other
+    auto read = json::from_file(file);
+    if (!read && GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES)
+    {
+        Logger::error(L"{} can't be read, the stage monitor isn't saved", file); // Writing from an empty map would lose the other monitors
+        return false;
+    }
+
+    auto settings = read.value_or(json::JsonObject{});
+    json::JsonObject monitors;
+    {
+        if (json::has(settings, L"properties", json::JsonValueType::Object))
+        {
+            const auto properties = settings.GetNamedObject(L"properties");
+            if (json::has(properties, NonLocalizable::StageMonitorsID, json::JsonValueType::Object))
+            {
+                const auto property = properties.GetNamedObject(NonLocalizable::StageMonitorsID);
+                if (json::has(property, L"value", json::JsonValueType::Object))
+                {
+                    monitors = property.GetNamedObject(L"value");
+                }
+            }
+        }
+    }
+
+    auto entry = ParseStageMonitors(monitors)[key];
+    entry.Overlay(change);
+
+    monitors.SetNamedValue(key, StageMonitorJson(entry));
+    return SaveValue(settings, NonLocalizable::StageMonitorsID, json::value(monitors), file); // The object that was read, not a second read
 }
 
 void FancyZonesSettings::NotifyObservers(SettingId id) const

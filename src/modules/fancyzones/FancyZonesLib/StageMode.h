@@ -68,10 +68,9 @@ public:
 
     void OnTimer() noexcept;
 
-    // The user changed these (keys and mouse come with Phase 5): they take effect and are saved to settings.json
+    // The user changed the layout choice (global for all monitors): it takes effect and is saved to settings.json.
+    // The cut and the stack heights are per monitor: a drag saves only the entry of its monitor (PersistMonitor).
     void SetLayoutName(const std::wstring& name) noexcept;
-    void SetMasterCut(double ratio) noexcept;
-    void SetRows(const std::vector<double>& rows) noexcept;
 
     static std::filesystem::path StateFilePath();
 
@@ -102,11 +101,13 @@ private:
         HMONITOR handle{};
         StageLayouts::LRect rect; // whole monitor
         StageLayouts::LRect work;
+        std::wstring key; // StageConfig::MonitorKey: what this monitor's cut and rows are saved under
     };
 
     struct MonitorStage
     {
         MonitorInfo monitor;
+        StageConfig::Values values; // the layout choice plus this monitor's own cut and rows (the global ones where it has no entry)
         std::vector<int> order; // layout order: master first
         std::unique_ptr<StageLayouts::ILayout> layout;
     };
@@ -158,7 +159,8 @@ private:
     void Rehome(int id, MonitorStage& from, MonitorStage& to);
     int MonitorIndex(const Rect& monitorRect) const;
     void Persist(const StageConfig::Values& after);
-    void ApplyValues(const StageConfig::Values& values);
+    void PersistMonitor(MonitorStage& stage);
+    void ApplyValues(const StageConfig::Values& global, const std::map<std::wstring, StageMonitorValues>& monitors);
     void Schedule(UINT millis);
     std::vector<Rect> MonitorRects() const;
     StageLayouts::Spacing CurrentSpacing() const;
@@ -175,7 +177,10 @@ private:
     std::optional<Drag> m_drag;
     bool m_active{};
     int m_nextId{ 1 };
-    StageConfig::Values m_values;
+    StageConfig::Values m_values; // the global values: layout choice, and the default cut and rows of a monitor without an entry
+    std::map<std::wstring, StageMonitorValues> m_monitorMap; // per monitor entries, as the settings file has them (plus our own saves not yet reloaded)
+    int m_keyRetries{}; // looks left for monitors the display lookup could not identify yet
+    bool m_settingsPending{}; // settings.json changed during a drag: applied once it ended
     std::vector<MonitorInfo> m_monitors;
     std::vector<MonitorStage> m_stages;
     std::map<int, Managed> m_windows;
