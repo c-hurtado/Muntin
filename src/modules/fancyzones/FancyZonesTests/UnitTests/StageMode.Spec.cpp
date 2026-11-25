@@ -297,14 +297,17 @@ namespace FancyZonesUnitTests
         {
             const LRect monitor(0, 0, 1920, 1080);
             const std::vector<LRect> monitors = { monitor };
-            const LRect master(0, 0, 1152, 1040);
-            const auto park = StagePark::Park(master, { 7, 0, 7, 7 }, monitor, monitors);
+            const LRect behind(0, 0, 1152, 1040); // the master place
+            const LRect window(-7, 0, 1159, 1047); // a docked window with its invisible frame
+            const auto park = StagePark::Park(window, behind, monitor, monitors);
             Assert::IsTrue(park.sliver);
-            Assert::AreEqual(-7, park.outer.L);
+            Assert::AreEqual(0, park.outer.L, L"x clamped inside the monitor");
             Assert::AreEqual(1079, park.outer.T, L"one pixel left on the monitor");
-            Assert::AreEqual(1152 + 14, park.outer.W(), L"same size as the master: the app relayouts once");
-            Assert::AreEqual(1040 + 7, park.outer.H());
+            Assert::AreEqual(window.W(), park.outer.W(), L"never resized: the app keeps its last frame");
+            Assert::AreEqual(window.H(), park.outer.H());
             Assert::IsTrue(StagePark::LooksParked(park.outer, monitor));
+            Assert::IsTrue(StagePark::Park(park.outer, behind, monitor, monitors).outer.Same(park.outer), L"parking again changes nothing");
+            Assert::IsFalse(StagePark::LooksParked(window, monitor));
         }
 
         TEST_METHOD (ParkingNeverReachesAnotherMonitor)
@@ -312,16 +315,76 @@ namespace FancyZonesUnitTests
             const LRect upper(0, 0, 1920, 1080), lower(0, 1080, 1920, 2160);
             const std::vector<LRect> monitors = { upper, lower };
             const LRect master(100, 0, 1000, 1040);
-            const auto below = StagePark::Park(master, {}, upper, monitors);
+            const auto below = StagePark::Park(master, master, upper, monitors);
             Assert::IsFalse(below.sliver, L"a sliver would show on the monitor below");
-            Assert::IsTrue(below.outer.Same(master), L"it waits behind the master instead");
+            Assert::IsTrue(below.outer.Same(master), L"it waits behind the master (the fallback place)");
 
-            const auto bottom = StagePark::Park(master, {}, lower, monitors);
+            const LRect onLower(100, 1080, 1000, 2120);
+            const auto bottom = StagePark::Park(onLower, master, lower, monitors);
             Assert::IsTrue(bottom.sliver, L"nothing below the lower monitor");
             Assert::AreEqual(2159, bottom.outer.T);
 
             const LRect right(1920, 0, 3840, 1080);
-            Assert::IsTrue(StagePark::Park(master, {}, upper, { upper, right }).sliver, L"a monitor on the side does not block");
+            Assert::IsTrue(StagePark::Park(master, master, upper, { upper, right }).sliver, L"a monitor on the side does not block");
+        }
+
+        TEST_METHOD (ParkedWindowKeepsItsSizeAndStaysInsideTheMonitorHorizontally)
+        {
+            const LRect monitor(1920, 0, 3840, 1080), left(0, 0, 1920, 1080);
+            const LRect behind(1920, 0, 3000, 1040);
+            const std::vector<LRect> monitors = { left, monitor };
+            // Hanging over the left edge into the other monitor: x moves in, size stays
+            auto park = StagePark::Park(LRect(1800, 50, 2800, 900), behind, monitor, monitors);
+            Assert::IsTrue(park.sliver);
+            Assert::AreEqual(1920, park.outer.L);
+            Assert::AreEqual(1000, park.outer.W());
+            Assert::AreEqual(850, park.outer.H());
+            // Hanging over the right edge
+            park = StagePark::Park(LRect(3300, 50, 4300, 900), behind, monitor, { monitor });
+            Assert::AreEqual(3840 - 1000, park.outer.L);
+            Assert::AreEqual(1000, park.outer.W());
+            // Wider than the monitor: starts at the left edge, accepts spilling right (nothing there)
+            park = StagePark::Park(LRect(2000, 0, 4200, 900), behind, monitor, { monitor });
+            Assert::IsTrue(park.sliver);
+            Assert::AreEqual(1920, park.outer.L);
+            Assert::AreEqual(2200, park.outer.W());
+            // ... but not onto another monitor: behind the master, in the master's place and size
+            const LRect behindLeft(0, 0, 1152, 1040);
+            park = StagePark::Park(LRect(100, 0, 2100, 900), behindLeft, left, { left, monitor });
+            Assert::IsFalse(park.sliver, L"the sliver would reach the monitor on the right");
+            Assert::IsTrue(park.outer.Same(behindLeft));
+        }
+
+        TEST_METHOD (FullHeightWindowStillGetsTheSliver)
+        {
+            // A window taller than the monitor (a full-height docked window with its frame on a monitor without a taskbar): own size, sliver
+            const LRect monitor(0, 0, 1920, 1080);
+            const LRect behind(0, 0, 1152, 1040);
+            const LRect tall(100, -20, 1000, 1200);
+            const auto park = StagePark::Park(tall, behind, monitor, { monitor });
+            Assert::IsTrue(park.sliver);
+            Assert::AreEqual(1079, park.outer.T);
+            Assert::AreEqual(tall.H(), park.outer.H(), L"not resized");
+            Assert::AreEqual(tall.W(), park.outer.W());
+            // as long as the sliver stays on this monitor
+            const LRect lower(0, 1080, 1920, 2160);
+            Assert::IsFalse(StagePark::Park(tall, behind, monitor, { monitor, lower }).sliver);
+        }
+
+        TEST_METHOD (WindowNotOnThisMonitorOrWithoutARectWaitsAsItAlwaysDid)
+        {
+            const LRect left(0, 0, 1920, 1080), right(1920, 0, 3840, 1080);
+            const LRect behind(1920, 0, 3000, 1040);
+            // Coming back from the left monitor: its size is of the other monitor, the master size on this one
+            auto park = StagePark::Park(LRect(100, 100, 1100, 900), behind, right, { left, right });
+            Assert::IsFalse(park.sliver);
+            Assert::IsTrue(park.outer.Same(behind));
+            // Unreadable rect
+            park = StagePark::Park(LRect(), behind, right, { left, right });
+            Assert::IsFalse(park.sliver);
+            Assert::IsTrue(park.outer.Same(behind));
+            Assert::IsTrue(StagePark::CenterOn(LRect(1800, 0, 2800, 900), right), L"the middle decides, not the edge");
+            Assert::IsFalse(StagePark::CenterOn(LRect(1000, 0, 2000, 900), right));
         }
 
         TEST_METHOD (OuterRectStopsAtSharedMonitorEdges)

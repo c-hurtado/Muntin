@@ -311,7 +311,8 @@ struct StageStrip::Impl
         const auto& rect = motion != s.motion.end() ? motion->second.cur : tile.rect;
         DWM_THUMBNAIL_PROPERTIES properties{};
         properties.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE | DWM_TNP_SOURCECLIENTAREAONLY;
-        properties.rcDestination = Local(StageStripMotion::Deflate(rect, StageStripMotion::PadOf(tile.window == s.hover)), s.strip.area);
+        const auto box = StageStripMotion::Deflate(rect, StageStripMotion::PadOf(tile.window == s.hover));
+        properties.rcDestination = Local(box, s.strip.area);
         // The window without its invisible resize frame: cropped by the frame insets (the title bar stays, as it does not with client-area-only)
         SIZE source{};
         if (FAILED(DwmQueryThumbnailSourceSize(it->second, &source)))
@@ -322,11 +323,18 @@ struct StageStrip::Impl
         s.lastSource[tile.window] = source;
         // Known size: a valid crop always replaces the old rcSource. Unknown size: no rcSource is sent (DWM keeps the last one; the
         // settle timer asks again)
+        int shownW = source.cx, shownH = source.cy; // the part of the source that is shown: the crop, or the whole of it
         if (const auto crop = StageStripPlan::CropFor(source.cx, source.cy, tile.insets))
         {
             properties.dwFlags |= DWM_TNP_RECTSOURCE;
             properties.rcSource = { crop->L, crop->T, crop->R, crop->B };
+            shownW = crop->W();
+            shownH = crop->H();
         }
+
+        // A parked window keeps its own shape: shown as large as fits the tile, centered (not stretched to it). With the size unknown the
+        // whole tile (FitRect). The rounded tile behind it is letterboxed: the thumbnail itself stays square-cornered.
+        properties.rcDestination = Local(StageStripMotion::FitRect(box, shownW, shownH), s.strip.area);
 
         properties.opacity = 255;
         properties.fVisible = TRUE;

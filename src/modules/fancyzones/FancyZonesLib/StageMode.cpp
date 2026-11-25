@@ -898,9 +898,14 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         else
         {
             m.guarded = false;
-            const auto park = StagePark::Park(plan.Park, m.insets, stage.monitor.rect, monitors);
+            // Never resized: a parked window keeps the size it has (an app that does not paint off-screen would show nothing at a new
+            // size, and so would its tile); promoting it docks it, and that resizes it
             RECT where{};
-            if (!(m.parked && GetWindowRect(m.window, &where) && ToRect(where).Same(park.outer)))
+            const bool haveRect = GetWindowRect(m.window, &where) != FALSE;
+            // Where the window waits behind the master when no sliver is possible (not on this monitor, or the sliver would show on another)
+            const auto behind = StagePark::OuterRect(plan.Park, m.insets, stage.monitor.rect, monitors);
+            const auto park = StagePark::Park(haveRect ? ToRect(where) : StageLayouts::LRect(), behind, stage.monitor.rect, monitors);
+            if (!(m.parked && haveRect && ToRect(where).Same(park.outer)))
             {
                 MoveTo(m.window, park.outer, !park.sliver, stage.monitor.handle); // Not again for a window that already sits there (HWND_BOTTOM is a z-order change)
             }

@@ -199,6 +199,22 @@ namespace StageStripMotion
         return step >= MaxSteps || (allSettled && step >= MinSteps);
     }
 
+    // Where a source of this size is shown in a box: as large as fits, the aspect kept, centered
+    inline LRect FitRect(const LRect& box, int width, int height)
+    {
+        if (width <= 0 || height <= 0 || box.W() <= 0 || box.H() <= 0)
+        {
+            return box;
+        }
+
+        const double scale = (std::min)(static_cast<double>(box.W()) / width, static_cast<double>(box.H()) / height);
+        const int w = (std::max)(1, static_cast<int>(width * scale + 0.5));
+        const int h = (std::max)(1, static_cast<int>(height * scale + 0.5));
+        const int l = box.L + (box.W() - w) / 2;
+        const int t = box.T + (box.H() - h) / 2;
+        return LRect(l, t, l + w, t + h);
+    }
+
     // The corner radius a tile can take
     inline int ClampRadius(int radius, int width, int height)
     {

@@ -2,8 +2,11 @@
 
 // Stage mode parking and placement, pure. A window that has no place in the layout (master: the ones beyond the stack cap, or
 // cut by minimum sizes) is parked like DesktopScroll parks its windows: as a one pixel sliver at the bottom edge of its monitor,
-// same x, same size, so it stays on its monitor (its DPI does not change). Where such a sliver would reach another monitor, the
-// window waits behind the master instead. Either way Stage::IsHeld keeps Muntin's docking away from it (Arrange::HandsOff).
+// so it stays on its monitor (its DPI does not change). A parked window is NEVER RESIZED: it keeps the size it has, so it keeps its
+// last painted frame (an app that does not paint off-screen would show nothing at a new size, and so would its strip thumbnail).
+// Only x moves, clamped so the window stays inside the horizontal bounds of its monitor. Where a sliver cannot be placed (it would
+// reach another monitor, or the window is not on this monitor) the window waits behind the master in the master's place and
+// size (the bottom of the z-order), as it always did. Either way Stage::IsHeld keeps Muntin's docking away from it (Arrange::HandsOff).
 
 #include <vector>
 
@@ -88,23 +91,49 @@ namespace StagePark
         bool sliver{}; // at the bottom edge of the monitor (else behind the master: send to the bottom of the z-order)
     };
 
-    // vis: where the window would sit if it were shown (the master rect: parked windows are as large as the master, so the app
-    // does not have to relayout twice). monitor: its monitor rect.
-    inline Placement Park(const LRect& vis, const Insets& ins, const LRect& monitor, const std::vector<LRect>& monitors)
+    // The x of a window of this width on a monitor: where it is, kept inside the monitor horizontally; a window wider than the monitor
+    // starts at the monitor's left edge (and accepts spilling to the right)
+    inline int ClampX(int x, int width, const LRect& monitor)
     {
-        const int w = vis.W() + ins.L + ins.R;
-        const int h = vis.H() + ins.T + ins.B;
-        const int x = vis.L - ins.L;
-        const int y = monitor.B - 1;
-        if (SliverClear(x, y, w, h, monitor, monitors))
+        if (width >= monitor.W())
         {
-            return { LRect(x, y, x + w, y + h), true };
+            return monitor.L;
         }
 
-        return { OuterRect(vis, ins, monitor, monitors), false };
+        return (std::min)((std::max)(x, monitor.L), monitor.R - width);
     }
 
-    // A window sitting where Park puts slivers: used to tell a parked window from one the user moved
+    // Whether a window is on the monitor: its horizontal middle is and it reaches into it vertically (a parked sliver has only its top row there).
+    // A window on another monitor has the size of that monitor's DPI, which is no size to keep here.
+    inline bool CenterOn(const LRect& r, const LRect& monitor)
+    {
+        const int cx = r.L + r.W() / 2;
+        return r.W() > 0 && r.H() > 0 && cx >= monitor.L && cx < monitor.R && r.T < monitor.B && r.B > monitor.T;
+    }
+
+    // current: the window rect now (outer, with the invisible frame), empty when unknown. monitor: the monitor of its stage. fallback:
+    // where the window waits behind the master when it cannot be a sliver (the master's place and size, on this monitor).
+    // The sliver keeps the size of the window, whatever its height (SliverClear keeps it off other monitors); it is not used for a
+    // window that is not on this monitor (it comes back the way it always did: master size, behind the master).
+    inline Placement Park(const LRect& current, const LRect& fallback, const LRect& monitor, const std::vector<LRect>& monitors)
+    {
+        if (CenterOn(current, monitor))
+        {
+            const int w = current.W();
+            const int h = current.H();
+            const int x = ClampX(current.L, w, monitor);
+            const int y = monitor.B - 1;
+            if (SliverClear(x, y, w, h, monitor, monitors))
+            {
+                return { LRect(x, y, x + w, y + h), true };
+            }
+        }
+
+        return { fallback, false };
+    }
+
+    // A window sitting where Park puts slivers (its top is the last pixel row of the monitor, whatever its size). Only the tests use it:
+    // the stage knows its parked windows by its own flag, and adoption looks at DesktopScroll::IsParked and the marks of other apps.
     inline bool LooksParked(const LRect& windowRect, const LRect& monitor)
     {
         return windowRect.T == monitor.B - 1;

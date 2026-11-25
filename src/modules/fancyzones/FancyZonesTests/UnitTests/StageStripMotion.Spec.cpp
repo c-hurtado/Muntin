@@ -266,6 +266,24 @@ namespace StageStripMotionUnitTests
             Assert::IsTrue(MaxSteps * static_cast<int>(SettleMillis) <= 2500);
         }
 
+        TEST_METHOD(ThumbnailIsFittedInTheTileKeepingTheWindowShape)
+        {
+            const LRect tile(100, 200, 500, 425); // 400 x 225
+            Assert::IsTrue(FitRect(tile, 1920, 1080).Same(tile), L"the shape of the tile: fills it");
+            const auto tall = FitRect(tile, 500, 500);
+            Assert::AreEqual(225, tall.W());
+            Assert::AreEqual(225, tall.H());
+            Assert::AreEqual(100 + (400 - 225) / 2, tall.L, L"centered");
+            Assert::IsTrue(tall.Inside(tile));
+            const auto wide = FitRect(tile, 800, 100);
+            Assert::AreEqual(400, wide.W());
+            Assert::AreEqual(50, wide.H());
+            Assert::IsTrue(wide.Inside(tile));
+            Assert::IsTrue(FitRect(tile, 0, 0).Same(tile), L"unknown size: the tile");
+            // a source at another DPI (bigger in pixels, same shape) fills the tile just the same
+            Assert::IsTrue(FitRect(tile, 2880, 1620).Same(tile));
+        }
+
         TEST_METHOD(HitTestFollowsTheProjectedTiles)
         {
             const auto shown = Project(Full(6, 3), 2);
