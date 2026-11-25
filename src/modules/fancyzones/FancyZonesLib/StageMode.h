@@ -49,7 +49,7 @@ public:
     bool Active() const noexcept { return m_active; }
 
     // Window events (FancyZones' window procedure, main thread)
-    void WindowAppeared(HWND window) noexcept; // created, shown, uncloaked, restored from minimized
+    void WindowAppeared(HWND window, bool firstSeen = true) noexcept; // created, shown, uncloaked, restored from minimized (firstSeen false: a window the stage knew)
     void WindowVisibility(HWND window, bool minimizing) noexcept; // minimized (true); restored, hidden or cloaked (false)
     void WindowDestroyed(HWND window) noexcept;
     void ScheduleRehome() noexcept; // something that may have moved a window happened (foreground change): a debounced look
@@ -94,6 +94,7 @@ private:
         int minW{}, minH{}; // smallest visible size, 0 = none known
         int learned{}; // how often a minimum was learned from how the window landed
         bool parked{}; // sits where Park put it
+        bool fullscreen{}; // went fullscreen (no title bar, covers the monitor): the stage leaves it alone until it is a normal window again
         bool needMeasure{}; // was maximized: insets and minimum size are taken once it is restored
         ULONGLONG unmaximizeUntil{}; // deadline for it to leave the maximized state
         ULONGLONG grace{}; // no learning from its size before this tick
@@ -156,6 +157,8 @@ private:
     void LandAll();
     void LooseCut(const std::vector<int>& ids);
     void PromoteDialogOwners();
+    void ReleaseOverlays();
+    void PromoteActivated(); // the debounced foreground window is parked: it comes forward
     void ResetMin(Managed& m);
     bool ForeignFullscreenOn(const MonitorStage& stage) const;
     void SyncStrip();
@@ -222,4 +225,10 @@ private:
     ULONGLONG m_orphanAt{};
     int m_orphanTries{};
     ULONGLONG m_guardAt{};
+    std::map<HWND, ULONGLONG> m_pendingSince; // when a pending window was first seen
+    std::map<HWND, StageAdopt::Backoff> m_overlayBackoff; // windows released as overlays: not taken again unchanged for a while
+    bool m_activateInGrace{}; // the foreground event came right after the stage's own focus change
+    HWND m_activateWindow{}; // a held window that became the foreground window: promoted once the foreground has settled
+    ULONGLONG m_activateAt{};
+    ULONGLONG m_graceUntil{}; // the stage changed the focus itself: foreground events before this tick are its own
 };

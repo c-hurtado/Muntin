@@ -51,6 +51,9 @@
     <ClCompile Include="StagePhase6.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="StageStripStretch.Spec.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="StageStripMotion.Spec.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

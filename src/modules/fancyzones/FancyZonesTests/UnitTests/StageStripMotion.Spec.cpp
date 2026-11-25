@@ -284,6 +284,78 @@ namespace StageStripMotionUnitTests
             Assert::IsTrue(FitRect(tile, 2880, 1620).Same(tile));
         }
 
+        TEST_METHOD(ClipCutsATileAtTheEdgeOfTheStrip)
+        {
+            const LRect clip(0, 100, 100, 500);
+            Assert::IsTrue(ClipRect(LRect(10, 120, 90, 200), clip).Same(LRect(10, 120, 90, 200)), L"inside: as it is");
+            Assert::IsTrue(ClipRect(LRect(10, 60, 90, 140), clip).Same(LRect(10, 100, 90, 140)), L"leaving at the top: cut");
+            Assert::IsTrue(ClipRect(LRect(10, 460, 90, 540), clip).Same(LRect(10, 460, 90, 500)), L"coming in at the bottom: cut");
+            Assert::AreEqual(0, ClipRect(LRect(10, 500, 90, 580), clip).W(), L"just outside: nothing");
+            Assert::AreEqual(0, ClipRect(LRect(10, 0, 90, 100), clip).H());
+        }
+
+        TEST_METHOD(SlideProjectionKeepsTilesJustOutsideTheStripOnBothSides)
+        {
+            const auto full = Full(12, 3); // pitch 60
+            auto shown = ProjectSlide(full, 5, 2);
+            Assert::AreEqual(size_t{ 7 }, shown.tiles.size(), L"3 showing + two waiting on each side");
+            Assert::AreEqual(std::uintptr_t{ 103 }, shown.tiles.front().window);
+            Assert::AreEqual(std::uintptr_t{ 109 }, shown.tiles.back().window);
+            Assert::AreEqual(-120, shown.tiles[0].rect.T, L"two slots above the first");
+            Assert::AreEqual(0, shown.tiles[2].rect.T);
+            Assert::AreEqual(120, shown.tiles[4].rect.T);
+            Assert::AreEqual(240, shown.tiles[6].rect.T, L"two slots below the last");
+            Assert::AreEqual(size_t{ 5 }, ProjectSlide(full, 0, 2).tiles.size(), L"at the start: nothing above");
+            Assert::AreEqual(size_t{ 5 }, ProjectSlide(full, 9, 2).tiles.size(), L"at the end: nothing below");
+            Assert::AreEqual(size_t{ 3 }, ProjectSlide(full, 0, 0).tiles.size(), L"no margin: as Project");
+        }
+
+        TEST_METHOD(AScrollIsOneSlideOfTheWholeList)
+        {
+            const auto full = Full(12, 3);
+            const auto before = ProjectSlide(full, 4, 2);
+            const auto after = ProjectSlide(full, 5, 2);
+            const int viewBottom = full.tiles[2].rect.B;
+            std::map<std::uintptr_t, Motion> motion;
+            for (const auto& t : before.tiles)
+            {
+                motion[t.window] = Motion::At(t.rect, 0);
+            }
+
+            std::vector<std::uintptr_t> staying;
+            for (const auto& t : after.tiles)
+            {
+                const auto it = motion.find(t.window);
+                if (it == motion.end())
+                {
+                    Assert::IsTrue(t.rect.T >= viewBottom, L"a tile that enters appears beyond the edge of the strip, not inside it");
+                    motion[t.window] = Motion::At(t.rect, 0);
+                }
+                else
+                {
+                    Retarget(it->second, t.rect, 0);
+                    staying.push_back(t.window);
+                }
+            }
+
+            const auto duration = 300;
+            for (const std::uint64_t now : { 0, 75, 150, 225, 300 })
+            {
+                std::vector<int> tops;
+                for (const auto window : staying)
+                {
+                    auto& m = motion[window];
+                    Step(m, now, duration, Linear);
+                    tops.push_back(m.cur.T);
+                }
+
+                for (size_t i = 1; i < tops.size(); i++)
+                {
+                    Assert::IsTrue(std::abs((tops[i] - tops[i - 1]) - 60) <= 1, L"constant spacing at every moment: the list slides as one");
+                }
+            }
+        }
+
         TEST_METHOD(HitTestFollowsTheProjectedTiles)
         {
             const auto shown = Project(Full(6, 3), 2);

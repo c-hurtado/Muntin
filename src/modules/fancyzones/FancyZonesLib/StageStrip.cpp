@@ -24,6 +24,7 @@ namespace
     constexpr COLORREF TileColor = RGB(0x1B, 0x1B, 0x20); // as StageProto's strip
     constexpr COLORREF HoverColor = RGB(0x4A, 0x4A, 0x5C); // the tile under the cursor
     constexpr int CornerRadius = 6; // StageProto's default
+    constexpr int SlideMargin = 2; // tiles kept just outside the strip on each side, so a scroll slides them in and out
     constexpr UINT_PTR AnimTimer = 1;
     constexpr UINT_PTR SettleTimer = 2;
     constexpr UINT AnimMillis = 16; // ~60 Hz, only while a tile moves
@@ -347,6 +348,8 @@ struct StageStrip::Impl
     static void ApplyRegion(Shown& s) noexcept
     {
         HRGN all = CreateRectRgn(0, 0, 0, 0);
+        const RECT view = Local(s.strip.clip, s.strip.area);
+        HRGN viewRgn = CreateRectRgn(view.left, view.top, view.right, view.bottom); // tiles on their way in or out are cut at the strip's edges
         for (const auto& tile : s.strip.tiles)
         {
             const auto it = s.motion.find(tile.window);
@@ -358,10 +361,16 @@ struct StageStrip::Impl
                 part = CreateRectRgn(r.left, r.top, r.right, r.bottom);
             }
 
+            if (s.strip.clip.W() > 0 && s.strip.clip.H() > 0)
+            {
+                CombineRgn(part, part, viewRgn, RGN_AND);
+            }
+
             CombineRgn(all, all, part, RGN_OR);
             DeleteObject(part);
         }
 
+        DeleteObject(viewRgn);
         SetWindowRgn(s.overlay, all, TRUE); // the system owns the region from here
         if (s.hover)
         {
@@ -522,12 +531,18 @@ struct StageStrip::Impl
 
             fresh.strip.key = change.next.key;
             fresh.strip.area = change.next.area;
+            fresh.strip.clip = change.next.clip;
             shown.push_back(std::move(fresh));
             s = &shown.back();
         }
-        else if (change.areaChanged)
+        else
         {
-            s->strip.area = change.next.area;
+            if (change.areaChanged)
+            {
+                s->strip.area = change.next.area;
+            }
+
+            s->strip.clip = change.next.clip; // the margins or the work area changed: the tiles are cut at the new edges
         }
 
         // The overlay's rect first, so that the destinations are in the right coordinates
@@ -774,7 +789,7 @@ struct StageStrip::Impl
 
         for (const auto& view : views)
         {
-            auto strip = StageStripMotion::Project(view.full, view.offset);
+            auto strip = StageStripMotion::ProjectSlide(view.full, view.offset, SlideMargin);
             for (auto& tile : strip.tiles)
             {
                 tile.live = tile.live || liveSeen.contains(tile.window);

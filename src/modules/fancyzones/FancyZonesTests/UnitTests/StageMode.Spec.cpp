@@ -293,6 +293,204 @@ namespace FancyZonesUnitTests
             Assert::IsTrue(owners.contains(h(1)));
         }
 
+        TEST_METHOD (OverlaysAndFullscreenLikeWindowsAreNotAdopted)
+        {
+            // The Snipping Tool's capture overlay: a XamlWindow without a title bar that covers the monitor
+            auto overlay = Plain();
+            overlay.cls = L"XamlWindow";
+            overlay.style = WS_POPUP | WS_THICKFRAME | WS_VISIBLE;
+            overlay.coversMonitor = true;
+            const wchar_t* reason = StageAdopt::SkipReason(overlay);
+            Assert::IsNotNull(reason);
+            Assert::IsTrue(std::wstring(reason).find(L"overlay") != std::wstring::npos, L"logged as an overlay");
+
+            auto bordered = overlay;
+            bordered.style = WS_OVERLAPPEDWINDOW;
+            Assert::IsNull(StageAdopt::SkipReason(bordered), L"with a title bar a window that covers the monitor (maximized) is fine");
+
+            auto smallFrameless = Plain();
+            smallFrameless.style = WS_POPUP | WS_THICKFRAME;
+            Assert::IsNull(StageAdopt::SkipReason(smallFrameless), L"a frameless app that does not cover the monitor is fine");
+
+            auto layered = Plain();
+            layered.style = WS_POPUP;
+            layered.exStyle = WS_EX_LAYERED;
+            Assert::IsNotNull(StageAdopt::SkipReason(layered), L"a layered popup without a title bar or a resize frame is an overlay");
+            layered.style = WS_POPUP | WS_THICKFRAME;
+            Assert::IsNull(StageAdopt::SkipReason(layered), L"layered but resizable (a translucent terminal): an app");
+            layered.style = WS_OVERLAPPEDWINDOW;
+            Assert::IsNull(StageAdopt::SkipReason(layered), L"a layered window with a title bar is an app");
+
+            auto transparent = Plain();
+            transparent.exStyle = WS_EX_TRANSPARENT;
+            Assert::IsNotNull(StageAdopt::SkipReason(transparent), L"click-through");
+
+            auto excluded = Plain();
+            excluded.excludedByUser = true;
+            Assert::AreEqual(std::wstring(L"excluded by fancyzones_excluded_apps"), std::wstring(StageAdopt::SkipReason(excluded)));
+            Assert::IsNull(StageAdopt::OverlayReason(Plain()));
+            Assert::IsNotNull(StageAdopt::OverlayReason(excluded), L"a held window of an app excluded meanwhile is released");
+        }
+
+        TEST_METHOD (FullscreenIsLeftAloneButOverlaysAreReleased)
+        {
+            auto fullscreen = Plain();
+            fullscreen.style = WS_POPUP | WS_THICKFRAME | WS_VISIBLE;
+            fullscreen.coversMonitor = true;
+            Assert::IsTrue(StageAdopt::FullscreenLike(fullscreen), L"F11 in a browser, a video, Alt+Enter");
+            Assert::IsNull(StageAdopt::HardOverlayReason(fullscreen), L"not released and moved: only left alone");
+            Assert::IsNotNull(StageAdopt::OverlayReason(fullscreen), L"but not adopted either");
+
+            auto windowed = fullscreen;
+            windowed.style = WS_OVERLAPPEDWINDOW;
+            Assert::IsFalse(StageAdopt::FullscreenLike(windowed), L"back to a normal window: landed again");
+            auto notCovering = fullscreen;
+            notCovering.coversMonitor = false;
+            Assert::IsFalse(StageAdopt::FullscreenLike(notCovering));
+
+            auto transparent = Plain();
+            transparent.exStyle = WS_EX_TRANSPARENT;
+            Assert::IsNotNull(StageAdopt::HardOverlayReason(transparent));
+            auto layered = Plain();
+            layered.style = WS_POPUP;
+            layered.exStyle = WS_EX_LAYERED;
+            Assert::IsNotNull(StageAdopt::HardOverlayReason(layered));
+            auto excluded = Plain();
+            excluded.excludedByUser = true;
+            Assert::IsNotNull(StageAdopt::HardOverlayReason(excluded));
+        }
+
+        TEST_METHOD (WezTermWithoutATitleBarIsStillAnOrdinaryWindow)
+        {
+            // window_decorations = "RESIZE": a resize frame, no title bar. Layered or not, docked as the master filling the work area or
+            // maximized: adopted and never an overlay.
+            for (const bool layered : { false, true })
+            {
+                auto wez = Plain();
+                wez.cls = L"org.wezfurlong.wezterm";
+                wez.style = WS_POPUP | WS_THICKFRAME | WS_VISIBLE | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+                wez.exStyle = layered ? WS_EX_LAYERED : 0;
+                Assert::IsFalse(StageAdopt::NoFrame(wez.style), L"it has the resize frame");
+                Assert::IsNull(StageAdopt::SkipReason(wez), L"adopted");
+                Assert::IsNull(StageAdopt::HardOverlayReason(wez), L"not released");
+
+                auto filling = wez;
+                filling.coversMonitor = true;
+                filling.zoomed = true;
+                Assert::IsFalse(StageAdopt::FullscreenLike(filling), L"maximized with a resize frame: an app window");
+                Assert::IsNull(StageAdopt::SkipReason(filling), L"still adopted");
+
+                // docked as the master that fills the work area (the monitor when the taskbar is hidden), not maximized
+                auto docked = wez;
+                docked.coversMonitor = true;
+                Assert::IsTrue(StageAdopt::FullscreenLike(docked), L"by its size alone it looks like F11");
+                Assert::IsTrue(StageAdopt::IsOwnPlacement(true, true), L"but its slot fills the monitor too: the stage put it there");
+                Assert::IsFalse(StageAdopt::IsOwnPlacement(true, false), L"a slot that does not fill the monitor: it really went fullscreen");
+                Assert::IsFalse(StageAdopt::IsOwnPlacement(false, false), L"not docked: nothing to compare with");
+            }
+        }
+
+        TEST_METHOD (BorderlessPopupCoveringTheMonitorIsAnOverlayAndAMaximizedWindowIsAdopted)
+        {
+            auto popup = Plain();
+            popup.style = WS_POPUP | WS_VISIBLE;
+            popup.coversMonitor = true;
+            Assert::IsTrue(StageAdopt::NoFrame(popup.style));
+            Assert::IsTrue(StageAdopt::FullscreenLike(popup));
+            Assert::IsNotNull(StageAdopt::SkipReason(popup), L"a borderless popup over the monitor");
+
+            auto layeredPopup = Plain();
+            layeredPopup.style = WS_POPUP | WS_VISIBLE;
+            layeredPopup.exStyle = WS_EX_LAYERED;
+            Assert::IsNotNull(StageAdopt::HardOverlayReason(layeredPopup), L"layered with no frame at all");
+
+            auto maximized = Plain();
+            maximized.style = WS_OVERLAPPEDWINDOW | WS_MAXIMIZE;
+            maximized.coversMonitor = true;
+            maximized.zoomed = true;
+            Assert::IsNull(StageAdopt::SkipReason(maximized), L"a maximized window with a title bar");
+
+            auto f11 = Plain();
+            f11.style = WS_POPUP | WS_THICKFRAME | WS_VISIBLE;
+            f11.coversMonitor = true;
+            f11.zoomed = false;
+            Assert::IsTrue(StageAdopt::FullscreenLike(f11), L"F11 of a resizable window: fullscreen, hands off");
+            Assert::IsNull(StageAdopt::HardOverlayReason(f11), L"never released and moved");
+        }
+
+        TEST_METHOD (ReleasedOverlayIsNotTakenAgainUnchangedForTenSeconds)
+        {
+            const StageAdopt::Backoff entry{ WS_POPUP | WS_THICKFRAME, WS_EX_LAYERED, 1000 };
+            Assert::IsTrue(StageAdopt::InBackoff(&entry, WS_POPUP | WS_THICKFRAME, WS_EX_LAYERED, 1000 + 9999));
+            Assert::IsFalse(StageAdopt::InBackoff(&entry, WS_POPUP | WS_THICKFRAME, WS_EX_LAYERED, 1000 + StageAdopt::BackoffMillis), L"after ten seconds: one more try");
+            Assert::IsFalse(StageAdopt::InBackoff(&entry, WS_OVERLAPPEDWINDOW, WS_EX_LAYERED, 1500), L"its style changed: a new window as far as the rule goes");
+            Assert::IsFalse(StageAdopt::InBackoff(&entry, WS_POPUP | WS_THICKFRAME, 0, 1500));
+            Assert::IsFalse(StageAdopt::InBackoff(nullptr, 0, 0, 1500), L"never released");
+
+            auto info = Plain();
+            info.inBackoff = true;
+            Assert::IsNotNull(StageAdopt::SkipReason(info));
+        }
+
+        TEST_METHOD (NewFullSizedWindowWithATitleBarIsAnOverlayOnlyForAFewSeconds)
+        {
+            Assert::IsTrue(StageAdopt::YoungFullSized(false, 1.0, 400));
+            Assert::IsTrue(StageAdopt::YoungFullSized(false, 0.96, 4999));
+            Assert::IsFalse(StageAdopt::YoungFullSized(false, 1.0, 5000), L"a few seconds old: an ordinary window");
+            Assert::IsFalse(StageAdopt::YoungFullSized(true, 1.0, 400), L"maximized: an ordinary window");
+            Assert::IsFalse(StageAdopt::YoungFullSized(false, 0.90, 400), L"a large window is not an overlay");
+            Assert::IsFalse(StageAdopt::YoungFullSized(false, 0.60, 100));
+            Assert::AreEqual(1.0, StageAdopt::MonitorShare(-8, 0, 1928, 1080, 0, 0, 1920, 1080), 1e-9, L"bigger than the monitor: all of it");
+            Assert::AreEqual(0.0, StageAdopt::MonitorShare(2000, 0, 3000, 1080, 0, 0, 1920, 1080), 1e-9);
+            Assert::AreEqual(0.5, StageAdopt::MonitorShare(0, 0, 960, 1080, 0, 0, 1920, 1080), 1e-9);
+
+            auto info = Plain();
+            info.youngFullSized = true;
+            Assert::IsNotNull(StageAdopt::SkipReason(info), L"declined while it is new and looks like an overlay");
+            info.youngFullSized = false;
+            Assert::IsNull(StageAdopt::SkipReason(info));
+        }
+
+        TEST_METHOD (CoversMonitorToleratesAFewPixels)
+        {
+            Assert::IsTrue(StageAdopt::CoversMonitor(0, 0, 1920, 1080, 0, 0, 1920, 1080));
+            Assert::IsTrue(StageAdopt::CoversMonitor(-7, -7, 1927, 1087, 0, 0, 1920, 1080), L"bigger than the monitor");
+            Assert::IsTrue(StageAdopt::CoversMonitor(2, 1, 1918, 1079, 0, 0, 1920, 1080), L"within 2 px");
+            Assert::IsFalse(StageAdopt::CoversMonitor(0, 0, 1920, 1040, 0, 0, 1920, 1080), L"the taskbar is left: a window, not an overlay");
+            Assert::IsFalse(StageAdopt::CoversMonitor(100, 100, 1000, 800, 0, 0, 1920, 1080));
+            Assert::IsTrue(StageAdopt::HasCaption(WS_OVERLAPPEDWINDOW));
+            Assert::IsFalse(StageAdopt::HasCaption(WS_POPUP | WS_THICKFRAME | WS_BORDER), L"a border alone is no title bar");
+        }
+
+        TEST_METHOD (ActivatingAParkedWindowPromotesIt)
+        {
+            StageAdopt::ActivateFacts f;
+            f.held = true;
+            Assert::IsTrue(StageAdopt::ShouldPromoteOnActivate(f), L"a parked held window that got the focus");
+
+            auto not_held = f;
+            not_held.held = false;
+            Assert::IsFalse(StageAdopt::ShouldPromoteOnActivate(not_held), L"shell, taskbar, our own windows, cut windows");
+            auto minimized = f;
+            minimized.minimized = true;
+            Assert::IsFalse(StageAdopt::ShouldPromoteOnActivate(minimized), L"released and adopted again on restore");
+            auto docked = f;
+            docked.docked = true;
+            Assert::IsFalse(StageAdopt::ShouldPromoteOnActivate(docked), L"already in a slot");
+            auto guarded = f;
+            guarded.guarded = true;
+            Assert::IsFalse(StageAdopt::ShouldPromoteOnActivate(guarded), L"a modal dialog keeps it put");
+            auto dragging = f;
+            dragging.dragging = true;
+            Assert::IsFalse(StageAdopt::ShouldPromoteOnActivate(dragging));
+            auto grace = f;
+            grace.inGrace = true;
+            Assert::IsFalse(StageAdopt::ShouldPromoteOnActivate(grace), L"the stage moved the focus itself: no feedback loop");
+            auto moved = f;
+            moved.stillForeground = false;
+            Assert::IsFalse(StageAdopt::ShouldPromoteOnActivate(moved), L"Alt-Tab went on: only the last window counts");
+        }
+
         TEST_METHOD (ParkingAsASliverAtTheBottomOfTheMonitor)
         {
             const LRect monitor(0, 0, 1920, 1080);

@@ -100,6 +100,28 @@ namespace StageStripPlanUnitTests
             Assert::AreEqual(3, strip->fit);
         }
 
+        TEST_METHOD(AChangedClipIsAnUpdateEvenWhenNothingElseMoved)
+        {
+            auto a = S(L"m", { T(1, 0) });
+            a.clip = LRect(0, 0, 100, 1000);
+            auto b = a;
+            Assert::AreEqual(size_t{ 0 }, DiffStrips({ a }, { b }).size(), L"nothing changed: nothing to do");
+            b.clip = LRect(0, 20, 100, 980); // the margins changed
+            const auto changes = DiffStrips({ a }, { b });
+            Assert::AreEqual(size_t{ 1 }, changes.size());
+            Assert::IsTrue(changes[0].kind == Kind::Update);
+            Assert::IsTrue(changes[0].next.clip.Same(b.clip), L"the renderer takes the new edges from the change");
+            Assert::IsFalse(a == b);
+        }
+
+        TEST_METHOD(BuildSetsTheClipToTheUsableArea)
+        {
+            const auto plan = PlanOf(*StageLayouts::MakeStage(), 3);
+            const auto strip = Build(L"m", plan, Src);
+            Assert::IsTrue(strip.has_value());
+            Assert::IsTrue(strip->clip.Same(plan.Area));
+        }
+
         TEST_METHOD(BuildKeepsTheInsets)
         {
             const auto strip = Build(L"m", PlanOf(*StageLayouts::MakeStage(), 2), Src);

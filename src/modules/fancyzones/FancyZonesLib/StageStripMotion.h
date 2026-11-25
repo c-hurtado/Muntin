@@ -60,6 +60,71 @@ namespace StageStripMotion
         return shown;
     }
 
+    // The part of a rect inside a clip (an empty rect when they do not meet): a tile on its way in or out of the strip is cut at the
+    // edge of the strip, not drawn over what lies beyond
+    inline LRect ClipRect(const LRect& r, const LRect& clip)
+    {
+        const int l = (std::max)(r.L, clip.L), t = (std::max)(r.T, clip.T), rr = (std::min)(r.R, clip.R), b = (std::min)(r.B, clip.B);
+        return rr > l && b > t ? LRect(l, t, rr, b) : LRect();
+    }
+
+    // The distance from one tile to the next (top to top): the tiles of a strip are laid one under the other
+    inline int Pitch(const Strip& full)
+    {
+        if (full.tiles.size() >= 2)
+        {
+            return full.tiles[1].rect.T - full.tiles[0].rect.T;
+        }
+
+        return full.tiles.empty() ? 0 : full.tiles[0].rect.H();
+    }
+
+    // The slot of a position in the list, counted from the first one that shows: the fit real slots, then the same distance on either
+    // side (where a tile waits just outside the strip, or has just left it)
+    inline LRect SlotRect(const Strip& full, int position)
+    {
+        if (full.tiles.empty())
+        {
+            return LRect();
+        }
+
+        const int fit = (std::max)(full.fit, 1);
+        if (position >= 0 && position < fit && static_cast<size_t>(position) < full.tiles.size())
+        {
+            return full.tiles[static_cast<size_t>(position)].rect;
+        }
+
+        const auto& edge = position < 0 ? full.tiles.front().rect : full.tiles[(std::min)(static_cast<size_t>(fit), full.tiles.size()) - 1].rect;
+        const int steps = position < 0 ? position : position - (fit - 1);
+        const int dy = steps * Pitch(full);
+        return LRect(edge.L, edge.T + dy, edge.R, edge.B + dy);
+    }
+
+    // What the strip draws for a scroll offset: the `fit` tiles that show, and `margin` more on each side, each in the slot of its
+    // position. A scroll moves every tile one slot (the same distance and the same ease, so the list slides as one); the tiles outside
+    // the strip wait just beyond its edges and come in from there; the region clips them (ClipRect).
+    inline Strip ProjectSlide(const Strip& full, int offset, int margin)
+    {
+        Strip shown;
+        shown.key = full.key;
+        shown.area = full.area;
+        shown.clip = full.clip;
+        shown.fit = full.fit;
+        shown.layout = full.layout;
+        const int total = static_cast<int>(full.tiles.size());
+        const int first = ClampOffset(offset, total, full.fit);
+        const int from = (std::max)(0, first - (std::max)(margin, 0));
+        const int to = (std::min)(total, first + (std::max)(full.fit, 0) + (std::max)(margin, 0));
+        for (int i = from; i < to; i++)
+        {
+            auto tile = full.tiles[static_cast<size_t>(i)];
+            tile.rect = SlotRect(full, i - first);
+            shown.tiles.push_back(tile);
+        }
+
+        return shown;
+    }
+
     inline LRect Lerp(const LRect& from, const LRect& to, double share)
     {
         const auto mix = [&](int a, int b) { return static_cast<int>(std::lround(a + (static_cast<double>(b) - a) * share)); };

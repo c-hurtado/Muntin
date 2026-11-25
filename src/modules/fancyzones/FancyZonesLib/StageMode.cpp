@@ -2,6 +2,7 @@
 #include "StageMode.h"
 
 #include <algorithm>
+#include <limits>
 #include <set>
 
 #include <dwmapi.h>
@@ -25,6 +26,9 @@
 namespace
 {
     constexpr UINT TickMillis = 250;
+    constexpr ULONGLONG NewWindowMinAgeMillis = 400; // a new window is looked at once it has existed this long (a capture overlay lives shorter)
+    constexpr ULONGLONG ActivateDebounceMillis = 130; // Alt-Tab cycling: only the window the foreground settles on is promoted
+    constexpr ULONGLONG ActivateGraceMillis = 600; // foreground events right after the stage moved the focus itself are its own
     constexpr ULONGLONG ScanDelayMillis = 1500; // After Enter: windows the desktop scroll was still bringing back
     constexpr ULONGLONG RelayoutDelayMillis = 500; // After a display change: the monitors settle first
     constexpr ULONGLONG VerifyRetryMillis = 400; // A size was seen once: look again before believing it
@@ -627,6 +631,35 @@ StageAdopt::AdoptInfo StageMode::Describe(HWND window)
     info.monitorKnown = StageFor(window) != nullptr;
     info.elevatedBlocked = !is_process_elevated() && IsProcessOfWindowElevated(window);
     info.heldElsewhere = DesktopScroll::IsParked(window) || MarkedByOther(window);
+    if (const HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))
+    {
+        MONITORINFO monitorInfo{ sizeof(monitorInfo) };
+        if (GetMonitorInfoW(monitor, &monitorInfo))
+        {
+            // The visible frame, not the rect with its invisible resize borders (those make every window look bigger than the screen)
+            RECT frame = rect;
+            if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))))
+            {
+                frame = rect;
+            }
+
+            const RECT& m = monitorInfo.rcMonitor;
+            info.coversMonitor = StageAdopt::CoversMonitor(frame.left, frame.top, frame.right, frame.bottom, m.left, m.top, m.right, m.bottom);
+            const auto since = m_pendingSince.find(window);
+            const auto now = GetTickCount64();
+            const unsigned long long age = since != m_pendingSince.end() ? now - since->second : (std::numeric_limits<unsigned long long>::max)();
+            info.zoomed = IsZoomed(window) != FALSE;
+            // Only for a window with a title bar (the fallback for a captioned overlay): a resizable one without is WezTerm or an app window
+            info.youngFullSized = StageAdopt::HasCaption(info.style) && StageAdopt::YoungFullSized(info.zoomed, StageAdopt::MonitorShare(frame.left, frame.top, frame.right, frame.bottom, m.left, m.top, m.right, m.bottom), age);
+        }
+    }
+
+    const auto backoff = m_overlayBackoff.find(window);
+    info.inBackoff = StageAdopt::InBackoff(backoff != m_overlayBackoff.end() ? &backoff->second : nullptr, info.style, info.exStyle, GetTickCount64());
+    // The same list as the dock mode: the user's escape hatch for apps that do not behave
+    std::wstring processPath = get_process_path(window);
+    CharUpperBuffW(processPath.data(), static_cast<DWORD>(processPath.length()));
+    info.excludedByUser = !processPath.empty() && FancyZonesWindowUtils::IsExcludedByUser(window, processPath);
     info.cutLoose = m_loose.contains(window);
     info.stuckMaximized = m_stuck.contains(window);
     if (info.stuckMaximized && !StageState::StillStuck(true, IsZoomed(window) != FALSE))
@@ -766,7 +799,9 @@ StageLayouts::Plan StageMode::ComputePlan(MonitorStage& stage)
     input.Work = stage.monitor.work;
     input.Spacing = CurrentSpacing();
     input.Wins = std::move(wins);
-    return stage.layout->Compute(input);
+    auto plan = stage.layout->Compute(input);
+    StageStripPlan::StretchTiles(plan); // the strip tiles share the height of the docked windows when they fit
+    return plan;
 }
 
 void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
@@ -849,6 +884,11 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         }
 
         auto& m = found->second;
+        if (m.fullscreen)
+        {
+            continue; // Fullscreen: not moved, not parked (its slot stays empty); it is landed again when it is a normal window
+        }
+
         if (m.id == skipId || (m_drag && m_drag->id == m.id))
         {
             continue; // The user has it by the mouse: the stage does not fight the drag, the drop puts it in its slot
@@ -1033,6 +1073,7 @@ void StageMode::StripClick(HWND window) noexcept
         }
 
         Logger::info(L"Stage: strip click hwnd={:x} class={}", reinterpret_cast<uintptr_t>(m->window), ClassOf(m->window));
+        m_graceUntil = GetTickCount64() + ActivateGraceMillis; // the focus change below is ours
         Land(*stage);
         if (m->window != GetForegroundWindow())
         {
@@ -1125,6 +1166,116 @@ void StageMode::PromoteDialogOwners()
     }
 }
 
+// A held window that turned into a hard overlay (click-through, layered without a title bar) or whose app was excluded meanwhile goes
+// back to where it was and is not taken again while it stays that way (and not more often than every few seconds). A window that merely
+// went fullscreen (F11, a video, Alt+Enter) is NOT moved: the stage leaves it alone, and lands it in its slot again when it is a normal
+// window again.
+void StageMode::ReleaseOverlays()
+{
+    std::vector<int> release;
+    std::vector<int> relandOf;
+    for (auto& [id, m] : m_windows)
+    {
+        if (!IsWindow(m.window) || IsIconic(m.window))
+        {
+            continue;
+        }
+
+        const auto info = Describe(m.window);
+        if (const auto* reason = StageAdopt::HardOverlayReason(info))
+        {
+            LogDecision(m.window, reason);
+            m_overlayBackoff[m.window] = { info.style, info.exStyle, GetTickCount64() };
+            release.push_back(id);
+            continue;
+        }
+
+        bool fullscreen = StageAdopt::FullscreenLike(info);
+        if (fullscreen)
+        {
+            // Not when it only sits in the slot the stage gave it and that slot fills the monitor (no margins, taskbar hidden)
+            MonitorStage* stage = StageOfId(id);
+            bool slotKnown = false, slotCovers = false;
+            if (stage)
+            {
+                const auto plan = ComputePlan(*stage);
+                const auto item = std::find_if(plan.Items.begin(), plan.Items.end(), [&](const StageLayouts::PlanItem& i) { return i.Id == id; });
+                if (item != plan.Items.end() && (item->Role == StageLayouts::Role::Main || item->Role == StageLayouts::Role::Docked))
+                {
+                    slotKnown = true;
+                    const auto& mr = stage->monitor.rect;
+                    slotCovers = StageAdopt::CoversMonitor(item->Rect.L, item->Rect.T, item->Rect.R, item->Rect.B, mr.L, mr.T, mr.R, mr.B);
+                }
+            }
+
+            fullscreen = !StageAdopt::IsOwnPlacement(slotKnown, slotCovers);
+        }
+
+        if (fullscreen && !m.fullscreen)
+        {
+            m.fullscreen = true;
+            LogDecision(m.window, L"went fullscreen: left alone until it is a normal window again");
+        }
+        else if (!fullscreen && m.fullscreen)
+        {
+            m.fullscreen = false;
+            LogDecision(m.window, L"a normal window again: back in its slot");
+            relandOf.push_back(id);
+        }
+    }
+
+    for (const int id : relandOf)
+    {
+        if (auto* stage = StageOfId(id))
+        {
+            Land(*stage);
+        }
+    }
+
+    for (const int id : release)
+    {
+        Release(id, false, true);
+    }
+}
+
+// A held window that is parked became the foreground window (the taskbar, Alt-Tab, an app): it comes forward in its own stage, exactly as
+// a click on its tile does. The stage's own focus changes (grace) and a drag never trigger it.
+void StageMode::PromoteActivated()
+{
+    const HWND window = m_activateWindow;
+    m_activateWindow = nullptr;
+    if (!m_active || !window || !IsWindow(window))
+    {
+        return;
+    }
+
+    auto* m = Find(window);
+    MonitorStage* stage = m ? StageOfId(m->id) : nullptr;
+    if (!m || !stage)
+    {
+        return;
+    }
+
+    StageAdopt::ActivateFacts facts;
+    facts.held = true;
+    facts.minimized = IsIconic(window) != FALSE;
+    facts.guarded = m->guarded;
+    facts.dragging = m_drag.has_value();
+    facts.inGrace = m_activateInGrace;
+    facts.stillForeground = ForegroundRoot() == window;
+    const auto plan = ComputePlan(*stage);
+    const auto item = std::find_if(plan.Items.begin(), plan.Items.end(), [&](const StageLayouts::PlanItem& i) { return i.Id == m->id; });
+    facts.docked = item == plan.Items.end() || item->Role == StageLayouts::Role::Main || item->Role == StageLayouts::Role::Docked;
+    if (!StageAdopt::ShouldPromoteOnActivate(facts) || !stage->layout->PromoteHidden(stage->order, m->id))
+    {
+        return;
+    }
+
+    m_graceUntil = GetTickCount64() + ActivateGraceMillis; // the Land below moves windows: its focus events are ours
+    Logger::info(L"Stage: a parked window was activated, it comes forward hwnd={:x} class={}", reinterpret_cast<uintptr_t>(window), ClassOf(window));
+    Land(*stage); // it is the foreground window already: nothing to hand the focus to
+}
+
 // A window of another process that fills the monitor (exclusive or borderless fullscreen, a video, a game) has the foreground: the
 // strip must not float over it. The shell (desktop, taskbar) and our own windows do not count.
 bool StageMode::ForeignFullscreenOn(const MonitorStage& stage) const
@@ -1180,7 +1331,7 @@ void StageMode::VerifyLanding()
 
             auto& m = found->second;
             RECT frame{};
-            if (m.learned >= MaxLearned || !IsWindow(m.window) || IsHungAppWindow(m.window) || !IsWindowVisible(m.window) || IsIconic(m.window) || IsZoomed(m.window) || m.guarded ||
+            if (m.learned >= MaxLearned || !IsWindow(m.window) || IsHungAppWindow(m.window) || !IsWindowVisible(m.window) || IsIconic(m.window) || IsZoomed(m.window) || m.guarded || m.fullscreen ||
                 FAILED(DwmGetWindowAttribute(m.window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))))
             {
                 m.pending = {};
@@ -1266,7 +1417,10 @@ void StageMode::LogDecision(HWND window, const wchar_t* verdict)
     last = verdict;
     wchar_t title[256]{};
     const int titleLength = InternalGetWindowText(window, title, ARRAYSIZE(title));
-    Logger::info(L"Stage: hwnd={:x} class={} title={} chars: {}", reinterpret_cast<uintptr_t>(window), ClassOf(window), (std::max)(titleLength, 0), verdict);
+    // The style, the extended style and the rect go in as well: what an overlay or an odd window looks like is read from here
+    RECT rect{};
+    GetWindowRect(window, &rect);
+    Logger::info(L"Stage: hwnd={:x} class={} title={} chars style={:x} ex={:x} rect={},{},{},{}: {}", reinterpret_cast<uintptr_t>(window), ClassOf(window), (std::max)(titleLength, 0), static_cast<unsigned long long>(GetWindowLongPtrW(window, GWL_STYLE)), static_cast<unsigned long long>(GetWindowLongPtrW(window, GWL_EXSTYLE)), rect.left, rect.top, rect.right, rect.bottom, verdict);
 }
 
 bool StageMode::Adopt(HWND window)
@@ -1537,10 +1691,19 @@ void StageMode::Scan()
 
 void StageMode::ProcessPending()
 {
+    const auto now = GetTickCount64();
     for (auto it = m_pending.begin(); it != m_pending.end();)
     {
+        const auto since = m_pendingSince.find(it->first);
+        if (since != m_pendingSince.end() && now < since->second + NewWindowMinAgeMillis && IsWindow(it->first))
+        {
+            ++it; // too new: the next tick (the attempts are not used up)
+            continue;
+        }
+
         if (!IsWindow(it->first) || Adopt(it->first) || Find(it->first) || --it->second <= 0)
         {
+            m_pendingSince.erase(it->first);
             it = m_pending.erase(it);
         }
         else
@@ -1550,7 +1713,7 @@ void StageMode::ProcessPending()
     }
 }
 
-void StageMode::WindowAppeared(HWND window) noexcept
+void StageMode::WindowAppeared(HWND window, bool firstSeen) noexcept
 {
     try
     {
@@ -1566,6 +1729,10 @@ void StageMode::WindowAppeared(HWND window) noexcept
         }
 
         m_pending[window] = PendingAttempts;
+        if (firstSeen)
+        {
+            m_pendingSince.try_emplace(window, GetTickCount64()); // only a new window waits: one that comes back from the tray or another desktop is adopted at once
+        }
         Schedule(TickMillis);
     }
     catch (...)
@@ -1596,7 +1763,7 @@ void StageMode::WindowVisibility(HWND window, bool minimizing) noexcept
 
         if (!m)
         {
-            WindowAppeared(window); // Restored from minimized
+            WindowAppeared(window, false); // Restored from minimized: a window the stage knew
         }
         else if (!IsWindowVisible(window) || IsCloaked(window))
         {
@@ -1615,6 +1782,8 @@ void StageMode::WindowDestroyed(HWND window) noexcept
     {
         StageDpi::Scope dpi;
         m_pending.erase(window);
+        m_pendingSince.erase(window);
+        m_overlayBackoff.erase(window);
         m_stuck.erase(window);
         m_loose.erase(window);
         m_exiled.erase(reinterpret_cast<std::uintptr_t>(window)); // Closed: nothing to send back
@@ -2047,10 +2216,12 @@ void StageMode::Leave() noexcept
         }
 
         m_pending.clear();
+        m_pendingSince.clear();
         m_loose.clear();
         m_exiled.clear();
         m_remeasure = false;
-        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = m_rehomeAt = m_dialogAt = 0;
+        m_scanAt = m_relayoutAt = m_verifyAt = m_guardAt = m_rehomeAt = m_dialogAt = m_activateAt = 0;
+        m_activateWindow = nullptr;
         m_scansLeft = 0;
 
         // Everything goes back; what can't (not responding) stays in the file
@@ -2184,6 +2355,7 @@ void StageMode::OnTimer() noexcept
         {
             m_pollAt = now + RehomePollMillis;
             RefreshStripCover();
+            ReleaseOverlays();
             PromoteDialogOwners(); // A modal dialog that came up with no event we heard
             if (m_stages.size() > 1 && !m_rehomeAt)
             {
@@ -2239,6 +2411,12 @@ void StageMode::OnTimer() noexcept
             PromoteDialogOwners();
         }
 
+        if (m_activateAt && now >= m_activateAt)
+        {
+            m_activateAt = 0;
+            PromoteActivated();
+        }
+
         if (m_verifyAt && now >= m_verifyAt)
         {
             m_verifyAt = 0;
@@ -2250,12 +2428,12 @@ void StageMode::OnTimer() noexcept
             RetryOrphans();
         }
 
-        if (m_active && !m_stages.empty() && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt && !m_dialogAt)
+        if (m_active && !m_stages.empty() && !m_scanAt && !m_rehomeAt && m_pending.empty() && !m_relayoutAt && !m_guardAt && !m_verifyAt && !m_dialogAt && !m_activateAt)
         {
             Schedule(static_cast<UINT>(RehomePollMillis)); // Idle: the slow poll is all that is left
         }
 
-        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || m_dialogAt || (m_active && m_settingsPending) || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
+        if (!m_pending.empty() || m_scanAt || m_rehomeAt || m_relayoutAt || m_guardAt || m_verifyAt || m_dialogAt || m_activateAt || (m_active && m_settingsPending) || (!m_orphans.empty() && m_orphanTries < MaxOrphanTries))
         {
             Schedule(TickMillis);
         }
@@ -2303,6 +2481,16 @@ void StageMode::NoteForeground(HWND foreground) noexcept
             m_keyTracker.Note(ForegroundOf(foreground));
             StageDpi::Scope dpi;
             RefreshStripCover(); // A fullscreen app in front hides the strip of its monitor (and the next foreground brings it back)
+
+            // A parked window that gets the focus from the taskbar, Alt-Tab or an app: promoted once the foreground has settled
+            const HWND root = foreground ? GetAncestor(foreground, GA_ROOT) : nullptr;
+            if (root && Find(root) && !IsIconic(root))
+            {
+                m_activateWindow = root;
+                m_activateInGrace = GetTickCount64() < m_graceUntil; // judged when the event came, not when the debounce ends
+                m_activateAt = GetTickCount64() + ActivateDebounceMillis;
+                Schedule(static_cast<UINT>(ActivateDebounceMillis + 20));
+            }
         }
     }
     catch (...)
@@ -2342,6 +2530,7 @@ void StageMode::KeyAction(StageKeys::Action action, HWND target) noexcept
         {
             return;
         }
+
 
         if (action == Action::CycleLayout)
         {
@@ -2426,6 +2615,7 @@ void StageMode::KeyAction(StageKeys::Action action, HWND target) noexcept
         const auto focus = m_windows.find(focusId);
         if (focusId != 0 && focus != m_windows.end() && IsWindow(focus->second.window) && !IsIconic(focus->second.window) && focus->second.window != GetForegroundWindow())
         {
+            m_graceUntil = GetTickCount64() + ActivateGraceMillis; // the foreground event of this focus change is ours
             FancyZonesWindowUtils::SwitchToWindow(focus->second.window); // The new master (a promoted window keeps the focus)
         }
     }

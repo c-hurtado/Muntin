@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -37,8 +38,9 @@ namespace StageStripPlan
         std::vector<Tile> tiles; // every parked window in plan order; the first `fit` lie inside the usable area, the others are scrolled to
         int fit{}; // how many tiles show at once (the strip scrolls when there are more)
         std::string layout; // the layout name: another layout resets the scroll
+        LRect clip; // where tiles show (the usable area of the plan): a tile that slides in or out is cut at its edges
 
-        bool operator==(const Strip& o) const { return key == o.key && area.Same(o.area) && tiles == o.tiles && fit == o.fit && layout == o.layout; }
+        bool operator==(const Strip& o) const { return key == o.key && area.Same(o.area) && clip.Same(o.clip) && tiles == o.tiles && fit == o.fit && layout == o.layout; }
     };
 
     inline std::wstring KeyOf(const LRect& monitor)
@@ -80,6 +82,77 @@ namespace StageStripPlan
         return SourceCrop(width, height, insets);
     }
 
+    // The tiles of a plan are as high as their aspect says (the shape of the master window). A presentation step on the plan after Compute
+    // (the layout engine is not touched) gives them the height that shows the most windows:
+    //  - they fit at the aspect height with room to spare: they share the whole usable height, the first tile's top at the top of the area,
+    //    the last tile's bottom at its bottom, the layout gap between them (the rounding remainder goes to the first tiles, so the last
+    //    one ends exactly at the bottom). The growth is capped at MaxStretch times the aspect height: past that (one or two tiles on a
+    //    tall screen) the group keeps the capped height and is centered vertically;
+    //  - they do not fit: all of them shrink equally, to share the usable height, down to MinTileHeight (so up to about ten windows show
+    //    on a 1350 px strip);
+    //  - not even at MinTileHeight: they keep it and the strip scrolls (the offset is in tiles).
+    // The width of the tiles never changes (the strip's), and a thumbnail is fitted inside its tile keeping its shape. plan.TileH stays
+    // the aspect height (the capacity rule is computed from it and only asks whether one tile fits). Everything that uses the strip
+    // rects (overlay, hit tests, hover, drop to swap, Build and its fit count) takes the plan from here, so they agree.
+    constexpr double MaxStretch = 1.6;
+    constexpr int MinTileHeight = 120;
+
+    inline void StretchTiles(StageLayouts::Plan& plan)
+    {
+        if (!plan.HasStrip || plan.TileH <= 0)
+        {
+            return;
+        }
+
+        std::vector<StageLayouts::PlanItem*> tiles;
+        for (auto& item : plan.Items)
+        {
+            if (item.Role == StageLayouts::Role::StripTile && item.Rect.W() > 0 && item.Rect.H() > 0)
+            {
+                tiles.push_back(&item);
+            }
+        }
+
+        const int n = static_cast<int>(tiles.size());
+        const int total = plan.Area.H();
+        const int gap = plan.Gap;
+        if (n == 0 || total <= 0)
+        {
+            return;
+        }
+
+        const int available = total - (n - 1) * gap;
+        const int minHeight = (std::min)(MinTileHeight, plan.TileH); // a tile that is small anyway is not made smaller
+        int base = 0;
+        int remainder = 0;
+        int top = plan.Area.T;
+        if (available >= n && available / n >= minHeight)
+        {
+            base = available / n;
+            remainder = available % n;
+            const int cap = static_cast<int>(std::floor(plan.TileH * MaxStretch));
+            if (base > cap)
+            {
+                base = cap;
+                remainder = 0;
+                top += (total - (n * base + (n - 1) * gap)) / 2;
+            }
+        }
+        else
+        {
+            base = minHeight; // too many even at the minimum: scrolls
+        }
+
+        int y = top;
+        for (int i = 0; i < n; i++)
+        {
+            const int h = base + (i < remainder ? 1 : 0);
+            auto& rect = tiles[static_cast<size_t>(i)]->Rect;
+            rect = LRect(rect.L, y, rect.R, y + h);
+            y += h + gap;
+        }
+    }
+
     // A strip over a window that is maximized or fills its monitor would cover its caption buttons and scroll bars, and a click on them
     // would hit a tile: the strip is not shown while a window of the stage is.
     inline bool CoversMonitor(const LRect& window, const LRect& monitor)
@@ -111,6 +184,7 @@ namespace StageStripPlan
         Strip strip;
         strip.key = key;
         strip.area = plan.Strip;
+        strip.clip = plan.Area;
         for (const auto& item : plan.Items)
         {
             if (item.Role != StageLayouts::Role::StripTile || item.Rect.W() <= 0 || item.Rect.H() <= 0)
@@ -260,7 +334,7 @@ namespace StageStripPlan
             c.area = old->area;
             c.areaChanged = !old->area.Same(now.area);
             c.tiles = DiffTiles(old->tiles, now.tiles);
-            if (c.areaChanged || !c.tiles.Empty())
+            if (c.areaChanged || !old->clip.Same(now.clip) || !c.tiles.Empty())
             {
                 changes.push_back(std::move(c));
             }
