@@ -47,6 +47,9 @@ namespace
     };
 
     const Choice MotionChoices[] = { { 0, L"Spring" }, { 1, L"Ease" } };
+    const Choice ArrangeChoices[] = { { 0, L"Dock (drag to dock windows)" }, { 1, L"Stage (one main window, the rest in a strip)" } };
+    const wchar_t* const StageLayoutNames[] = { L"master", L"stage", L"pair" };
+    const wchar_t* const StageLayoutLabels[] = { L"Master and stack", L"Stage with strip", L"Pair with strip" };
     const Choice PageChoices[] = { { 1, L"1 (no scrolling)" }, { 2, L"2" }, { 3, L"3" }, { MaxDesktopScrollPages, L"4" } };
 
     // One slider each in the gap and margins dialog; settings.json allows more than the sliders reach
@@ -74,11 +77,12 @@ namespace
         Quit,
         SaveLayoutCommand,
         SpacingCommand,
-        ArrangeCommand,
         LoadLayoutCommand,
         ToggleBase = 100,
         PagesBase = 300,
         MotionBase = 400,
+        ArrangeBase = 500,
+        StageLayoutBase = 600,
     };
 
     HINSTANCE s_instance{};
@@ -871,7 +875,17 @@ namespace
             AppendMenuW(menu, MF_STRING | (settings.*Toggles[i].value ? MF_CHECKED : 0) | (idle ? MF_GRAYED : 0), static_cast<UINT_PTR>(ToggleBase) + i, Toggles[i].label);
         }
 
-        AppendMenuW(menu, MF_STRING | (settings.arrangeMode == 1 ? MF_CHECKED : 0), ArrangeCommand, L"Arrange: Dock / Stage");
+        HMENU arrange = ChoiceMenu(ArrangeChoices, std::size(ArrangeChoices), settings.arrangeMode == 1 ? 1 : 0, ArrangeBase);
+        AppendMenuW(arrange, MF_SEPARATOR, 0, nullptr);
+        for (size_t i = 0; i < std::size(StageLayoutNames); ++i)
+        {
+            // A name nobody knows is the master layout, as in StageConfig
+            const bool known = settings.stageLayout == L"stage" || settings.stageLayout == L"pair";
+            const bool current = known ? settings.stageLayout == StageLayoutNames[i] : i == 0;
+            AppendMenuW(arrange, MF_STRING | (current ? MF_CHECKED : 0) | (settings.arrangeMode == 1 ? 0 : MF_GRAYED), static_cast<UINT_PTR>(StageLayoutBase) + i, StageLayoutLabels[i]);
+        }
+
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(arrange), L"Arrange");
         AppendMenuW(menu, MF_STRING, SpacingCommand, L"Gap and margins...");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(MotionChoices, std::size(MotionChoices), settings.dockMotionCurve, MotionBase)), L"Motion curve");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(PageChoices, std::size(PageChoices), settings.desktopScrollPages, PagesBase)), L"Desktop pages per monitor");
@@ -896,9 +910,13 @@ namespace
         {
             PickLayout();
         }
-        else if (command == ArrangeCommand)
+        else if (command >= ArrangeBase && command - ArrangeBase < std::size(ArrangeChoices))
         {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::ArrangeModeID, json::value(settings.arrangeMode == 1 ? 0 : 1));
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::ArrangeModeID, json::value(ArrangeChoices[command - ArrangeBase].value));
+        }
+        else if (command >= StageLayoutBase && command - StageLayoutBase < std::size(StageLayoutNames))
+        {
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::StageLayoutID, json::value(std::wstring{ StageLayoutNames[command - StageLayoutBase] }));
         }
         else if (command == SpacingCommand)
         {
