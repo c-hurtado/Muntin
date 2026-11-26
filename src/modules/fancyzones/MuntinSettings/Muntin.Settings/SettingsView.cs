@@ -3,7 +3,10 @@ using System.Text.Json.Nodes;
 using CommunityToolkit.WinUI.Controls;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Markup;
+using Rectangle = Microsoft.UI.Xaml.Shapes.Rectangle;
 using S = Muntin.Settings.SettingsSchema;
 
 namespace Muntin.Settings.App;
@@ -85,8 +88,14 @@ internal sealed class SettingsView
     // Writes one key, then updates the local copy so dependent controls follow before the file watcher reports back
     private void Save(SettingDef def, JsonNode value)
     {
-        if (_updating || !_editable)
+        if (_updating)
         {
+            return;
+        }
+
+        if (!_editable)
+        {
+            _dispatcher.TryEnqueue(RefreshControls); // The keyboard still reaches the controls: show the value in effect again
             return;
         }
 
@@ -113,8 +122,14 @@ internal sealed class SettingsView
     // The arrange mode: both keys in one write, then the local copy, as Save does
     private void SaveMode(ModeDef mode)
     {
-        if (_updating || !_editable)
+        if (_updating)
         {
+            return;
+        }
+
+        if (!_editable)
+        {
+            _dispatcher.TryEnqueue(RefreshControls); // The keyboard still reaches the controls: show the value in effect again
             return;
         }
 
@@ -251,12 +266,13 @@ internal sealed class SettingsView
         return card;
     }
 
-    private SettingsExpander Advanced(params SettingsCard[] cards)
+    private static SettingsExpander Advanced(string description, params SettingsCard[] cards)
     {
         var expander = new SettingsExpander
         {
             Header = "Advanced",
-            Description = "Rarely needed",
+            Description = description,
+            Margin = new Thickness(0, 20, 0, 0), // Apart from the group above it
             HeaderIcon = new FontIcon { Glyph = "" },
         };
         foreach (var card in cards)
@@ -267,13 +283,40 @@ internal sealed class SettingsView
         return expander;
     }
 
+    private static T Resource<T>(string key) => (T)Application.Current.Resources[key];
+
+    // Brushes set in code keep the theme they were read in; parsed {ThemeResource} ones follow theme, contrast and accent changes
+    private static T Themed<T>(string xaml) =>
+        (T)XamlReader.Load(xaml.Replace("NS", "xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'", StringComparison.Ordinal));
+
+    private static TextBlock SecondaryText() => Themed<TextBlock>(
+        "<TextBlock NS Style='{StaticResource CaptionTextBlockStyle}' Foreground='{ThemeResource TextFillColorSecondaryBrush}' TextWrapping='WrapWholeWords' />");
+
+    // A card's leading icon (Segoe Fluent Icons), as in Windows Settings
+    private static T Icon<T>(T card, string glyph)
+        where T : SettingsCard
+    {
+        card.HeaderIcon = new FontIcon { Glyph = glyph };
+        return card;
+    }
+
+    // A heading over a run of related cards
+    private static TextBlock Group(string title) =>
+        new() { Text = title, Style = Resource<Style>("BodyStrongTextBlockStyle"), Margin = new Thickness(1, 24, 0, 4) };
+
     private static StackPanel Page(string title, params UIElement[] items)
     {
         var page = new StackPanel { Spacing = 4 };
-        page.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["TitleTextBlockStyle"], Margin = new Thickness(0, 0, 0, 12) });
+        page.Children.Add(new TextBlock { Text = title, Style = Resource<Style>("TitleTextBlockStyle"), Margin = new Thickness(0, 0, 0, 12) });
         foreach (var item in items)
         {
             page.Children.Add(item);
+        }
+
+        // A heading right under the title needs no extra space above it
+        if (items.Length > 0 && items[0] is TextBlock first)
+        {
+            first.Margin = new Thickness(1, 0, 0, 4);
         }
 
         return page;
@@ -283,27 +326,90 @@ internal sealed class SettingsView
 
     // ---- Sections
 
+    // One line under each mode's picture (S.Modes order; the labels themselves match the tray)
+    private static readonly string[] ModeBlurbs =
+    [
+        "Drag windows against the screen edges and each other.",
+        "One large window, the others stacked beside it.",
+        "One window in front, the others waiting in a strip.",
+        "Two windows side by side, the others in a strip.",
+    ];
+
+    // Each mode's picture on a 156 x 96 screen: (x, y, width, height, a main window), the strip on the right as in Muntin
+    private static readonly (double X, double Y, double W, double H, bool Main)[][] ModeShapes =
+    [
+        [(6, 6, 70, 84, true), (80, 6, 70, 40, false), (80, 50, 70, 40, false)],
+        [(6, 6, 88, 84, true), (98, 6, 52, 26, false), (98, 35, 52, 26, false), (98, 64, 52, 26, false)],
+        [(6, 6, 114, 84, true), (124, 6, 26, 26, false), (124, 35, 26, 26, false), (124, 64, 26, 26, false)],
+        [(6, 6, 55, 84, true), (65, 6, 55, 84, true), (124, 6, 26, 26, false), (124, 35, 26, 26, false), (124, 64, 26, 26, false)],
+    ];
+
+    // mains: gets the tile's main windows, which light up only on the selected mode
+    private static FrameworkElement ModeTile(ModeDef mode, string blurb, (double X, double Y, double W, double H, bool Main)[] shapes, List<UIElement> mains)
+    {
+        var screen = new Canvas { Width = 156, Height = 96 };
+        foreach (var (x, y, w, h, main) in shapes)
+        {
+            var window = Themed<Rectangle>($"<Rectangle NS RadiusX='3' RadiusY='3' Fill='{{ThemeResource {(main ? "AccentFillColorDefaultBrush" : "ControlStrongFillColorDisabledBrush")}}}' />");
+            window.Width = w;
+            window.Height = h;
+            Canvas.SetLeft(window, x);
+            Canvas.SetTop(window, y);
+            screen.Children.Add(window);
+            if (main)
+            {
+                mains.Add(window);
+            }
+        }
+
+        var tile = new StackPanel { Width = 176, Spacing = 2, Padding = new Thickness(10, 10, 10, 12) };
+        var frame = Themed<Border>("<Border NS HorizontalAlignment='Left' CornerRadius='6' BorderThickness='1' Margin='0,0,0,8' "
+            + "BorderBrush='{ThemeResource CardStrokeColorDefaultBrush}' Background='{ThemeResource ControlFillColorDefaultBrush}' />");
+        frame.Child = screen;
+        tile.Children.Add(frame);
+        tile.Children.Add(new TextBlock { Text = mode.Label, Style = Resource<Style>("BodyStrongTextBlockStyle") });
+        var text = SecondaryText();
+        text.Text = blurb;
+        tile.Children.Add(text);
+        AutomationProperties.SetName(tile, mode.Label);
+        AutomationProperties.SetHelpText(tile, blurb);
+        return tile;
+    }
+
     // One choice for the mode and the Stage layout, as in the tray: Dock, or Stage with one of its three layouts
     private FrameworkElement BuildArrange()
     {
-        var modes = new RadioButtons { MaxColumns = 1 };
-        foreach (var mode in S.Modes)
+        // Tiles whose text wraps to fewer lines stay top-aligned with the others
+        var container = new Style(typeof(GridViewItem));
+        container.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Top));
+        var modes = new GridView { SelectionMode = ListViewSelectionMode.Single, Margin = new Thickness(-4, 0, 0, 0), ItemContainerStyle = container };
+        AutomationProperties.SetName(modes, "Arrange mode");
+        var mains = new List<UIElement>[S.Modes.Length];
+        for (var i = 0; i < S.Modes.Length; i++)
         {
-            modes.Items.Add(mode.Label);
+            mains[i] = [];
+            modes.Items.Add(ModeTile(S.Modes[i], ModeBlurbs[i], ModeShapes[i], mains[i]));
         }
 
-        var card = new SettingsCard
+        void Light(int selected)
         {
-            Header = "Arrange",
-            Content = modes,
-            ContentAlignment = ContentAlignment.Vertical,
-            HorizontalContentAlignment = HorizontalAlignment.Left,
-        };
+            for (var i = 0; i < mains.Length; i++)
+            {
+                foreach (var window in mains[i])
+                {
+                    window.Opacity = i == selected ? 1 : 0.35;
+                }
+            }
+        }
 
-        // RadioButtons can report a selection after the refresh is over (when it loads): only a different mode is written
+        var note = SecondaryText();
+        note.Margin = new Thickness(1, 8, 0, 0);
+
+        // The list can report a selection after the refresh is over (when it loads): only a different mode is written
         modes.SelectionChanged += (_, _) =>
         {
             var index = modes.SelectedIndex;
+            Light(index);
             if (index >= 0 && index != SettingsStore.ReadMode(_properties, _fileExists).Index)
             {
                 SaveMode(S.Modes[index]);
@@ -311,12 +417,13 @@ internal sealed class SettingsView
         };
         _refreshers.Add(() =>
         {
-            var (index, note) = SettingsStore.ReadMode(_properties, _fileExists);
+            var (index, odd) = SettingsStore.ReadMode(_properties, _fileExists);
             modes.SelectedIndex = index; // -1: none, the layout Muntin keeps isn't in the file
-            card.Description = Join("How windows are arranged. Win+Shift+L cycles the Stage layouts.", note);
+            Light(index);
+            note.Text = Join("Win+Shift+L cycles the Stage layouts.", odd);
         });
 
-        return Page("Arrange", card);
+        return Page("Arrange", Group("How windows are arranged"), modes, note);
     }
 
     private FrameworkElement BuildStage()
@@ -373,28 +480,39 @@ internal sealed class SettingsView
 
         var width = Note("Strip width", "Drag the inner edge of the strip to make it wider or narrower.");
         const string perMonitor = "A split dragged on a monitor is kept for that monitor and wins over this.";
-        var advanced = Advanced(Number(S.StagePairCut, perMonitor), Number(S.StageMasterCut, perMonitor));
+        var advanced = Advanced("Default splits for Pair and Master", Number(S.StagePairCut, perMonitor), Number(S.StageMasterCut, perMonitor));
 
-        return Page("Stage", promote, promoteStyle, move, radius, width, advanced);
+        return Page(
+            "Stage",
+            Group("Motion"),
+            Icon(promote, ""),
+            Icon(promoteStyle, ""),
+            Icon(move, ""),
+            Group("Strip"),
+            Icon(radius, ""),
+            Icon(width, ""),
+            advanced);
     }
 
     private FrameworkElement BuildDock()
     {
-        var items = new List<UIElement>
-        {
-            Toggle(S.ShiftDrag),
-            Toggle(S.DockEdgeSnap),
-            Toggle(S.DockAutoTile),
-            Toggle(S.OverrideSnapHotkeys),
-            Toggle(S.DockCaptionButtons),
-            Toggle(S.DockMiddleClickExpand),
-            Combo(S.DesktopScrollPages, S.PageChoices, "Pages each monitor scrolls through, the first included."),
+        return Page(
+            "Dock",
+            Group("Docking"),
+            Icon(Toggle(S.ShiftDrag), ""),
+            Icon(Toggle(S.DockEdgeSnap), ""),
+            Icon(Toggle(S.DockAutoTile), ""),
+            Group("Keys and buttons"),
+            Icon(Toggle(S.OverrideSnapHotkeys), ""),
+            Icon(Toggle(S.DockCaptionButtons), ""),
+            Icon(Toggle(S.DockMiddleClickExpand), ""),
+            Group("Desktop"),
+            Icon(Combo(S.DesktopScrollPages, S.PageChoices, "Pages each monitor scrolls through, the first included."), ""),
             Advanced(
+                "Distances that start docking",
                 Number(S.DockEdgeSnapBand, "Distance from the left or right screen edge within which a window docks."),
                 Number(S.DockEdgeBand, "Distance from a work area edge within which a window docks against the whole work area."),
-                Number(S.DockWindowEdgePercent, "Share of a docked window, from each edge, within which a window docks against it.")),
-        };
-        return Page("Dock", [.. items]);
+                Number(S.DockWindowEdgePercent, "Share of a docked window, from each edge, within which a window docks against it.")));
     }
 
     private FrameworkElement BuildAnimations()
@@ -402,21 +520,22 @@ internal sealed class SettingsView
         const string needsAnimations = "Turn on Animations first.";
         return Page(
             "Animations",
-            Toggle(S.DockAnimation, "Windows glide to their new places."),
-            Toggle(S.DockAnticipation, null, () => Animations, needsAnimations),
-            Combo(S.DockMotionCurve, S.MotionChoices, "Spring overshoots a little; Ease settles without overshoot."), // Not greyed, like the tray
-            Toggle(S.DesktopScrollOverview));
+            Icon(Toggle(S.DockAnimation, "Windows glide to their new places."), ""),
+            Icon(Toggle(S.DockAnticipation, null, () => Animations, needsAnimations), ""),
+            Icon(Combo(S.DockMotionCurve, S.MotionChoices, "Spring overshoots a little; Ease settles without overshoot."), ""), // Not greyed, like the tray
+            Icon(Toggle(S.DesktopScrollOverview), ""));
     }
 
     private FrameworkElement BuildSpacing()
     {
-        var items = new List<UIElement>();
-        foreach (var spacing in S.Spacings)
+        var gap = S.Spacings[0];
+        var items = new List<UIElement> { Group("Between windows"), Icon(Spacing(gap), ""), Group("Screen edges") };
+        foreach (var margin in S.Spacings.Skip(1))
         {
-            items.Add(Spacing(spacing));
+            items.Add(Icon(Spacing(margin), ""));
         }
 
-        items.Add(Advanced([.. S.Spacings.Select(s => Number(s.Setting, "The exact value; settings.json allows more than the slider reaches."))]));
+        items.Add(Advanced("Exact values, beyond the slider's reach", [.. S.Spacings.Select(s => Number(s.Setting, "The exact value; settings.json allows more than the slider reaches."))]));
         return Page("Gap and margins", [.. items]);
     }
 
@@ -460,8 +579,9 @@ internal sealed class SettingsView
 
         return Page(
             "Startup",
-            signIn,
-            new SettingsCard { Header = "Settings folder", Description = Path.GetDirectoryName(_store.Path) ?? _store.Path, Content = folder },
-            new SettingsCard { Header = "Help", Description = S.HelpUrl, Content = help });
+            Icon(signIn, ""),
+            Group("Files and help"),
+            Icon(new SettingsCard { Header = "Settings folder", Description = Path.GetDirectoryName(_store.Path) ?? _store.Path, Content = folder }, ""),
+            Icon(new SettingsCard { Header = "Help", Description = S.HelpUrl, Content = help }, ""));
     }
 }

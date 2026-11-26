@@ -7,24 +7,34 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
+        <!--  The window's own title bar: icon, name and the pane button, over Mica  -->
+        <TitleBar
+            x:Name="AppTitleBar"
+            Grid.Row="0"
+            IsBackButtonVisible="False"
+            IsPaneToggleButtonVisible="True"
+            PaneToggleRequested="AppTitleBar_PaneToggleRequested" />
         <InfoBar
             x:Name="FileBar"
-            Grid.Row="0"
-            Margin="12,8,12,0"
+            Grid.Row="1"
+            Margin="16,0,16,8"
             IsClosable="False"
             IsOpen="False"
             Severity="Error" />
         <NavigationView
             x:Name="Nav"
-            Grid.Row="1"
+            Grid.Row="2"
             CompactModeThresholdWidth="560"
             DisplayModeChanged="Nav_DisplayModeChanged"
             ExpandedModeThresholdWidth="900"
             IsBackButtonVisible="Collapsed"
+            IsPaneToggleButtonVisible="False"
             IsSettingsVisible="False"
-            OpenPaneLength="220"
+            IsTitleBarAutoPaddingEnabled="False"
+            OpenPaneLength="240"
             PaneDisplayMode="Auto"
             SelectionChanged="Nav_SelectionChanged">
             <NavigationView.MenuItems>
@@ -40,7 +50,7 @@
                 </NavigationViewItem>
                 <NavigationViewItem Content="Dock" Tag="Dock">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE718;" />
+                        <FontIcon Glyph="&#xE90C;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="Animations" Tag="Animations">
@@ -61,10 +71,19 @@
             </NavigationView.MenuItems>
             <ScrollViewer
                 x:Name="Scroller"
-                Padding="24,12,24,24"
                 HorizontalScrollBarVisibility="Disabled"
                 HorizontalScrollMode="Disabled">
-                <StackPanel x:Name="Host" MaxWidth="860" />
+                <!--  One left-aligned column, as in Windows Settings: it stretches up to 1000 and stops there  -->
+                <Grid x:Name="Column" Padding="36,24,36,36">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MaxWidth="1000" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ContentControl
+                        x:Name="Host"
+                        HorizontalContentAlignment="Stretch"
+                        IsTabStop="False" />
+                </Grid>
             </ScrollViewer>
         </NavigationView>
     </Grid>

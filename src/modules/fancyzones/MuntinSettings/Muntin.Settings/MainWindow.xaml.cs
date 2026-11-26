@@ -4,6 +4,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Muntin.Settings.App;
 
@@ -21,7 +22,13 @@ public sealed partial class MainWindow : Microsoft.UI.Xaml.Window
     {
         InitializeComponent();
         Title = Program.WindowTitle;
+        AppTitleBar.Title = Program.WindowTitle; // Program finds the running window by this title
         SystemBackdrop = new MicaBackdrop();
+
+        // The XAML title bar replaces the system one; caption buttons stay the system's
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
 
         // AppWindow sizes are physical pixels
         var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
@@ -39,6 +46,7 @@ public sealed partial class MainWindow : Microsoft.UI.Xaml.Window
         if (File.Exists(icon))
         {
             AppWindow.SetIcon(icon);
+            AppTitleBar.IconSource = new ImageIconSource { ImageSource = new BitmapImage(new Uri(icon)) };
         }
 
         _view = new SettingsView(_store, DispatcherQueue, muntinExe);
@@ -120,19 +128,20 @@ public sealed partial class MainWindow : Microsoft.UI.Xaml.Window
         }
     }
 
-    // As a menu button (Minimal) the pane's toggle sits over the content's top left corner: the page title goes below it
+    // The pane button lives in the title bar: it opens the pane as an overlay (Minimal, Compact) or folds it (Expanded)
+    private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args) => Nav.IsPaneOpen = !Nav.IsPaneOpen;
+
+    // Narrow windows keep more room for the cards
     private void Nav_DisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args)
     {
-        var minimal = args.DisplayMode == NavigationViewDisplayMode.Minimal;
-        Scroller.Padding = minimal ? new Thickness(16, 48, 16, 16) : new Thickness(24, 12, 24, 24);
+        Column.Padding = args.DisplayMode == NavigationViewDisplayMode.Minimal ? new Thickness(16, 16, 16, 24) : new Thickness(36, 24, 36, 36);
     }
 
     private void Nav_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.SelectedItem is NavigationViewItem { Tag: string tag })
         {
-            Host.Children.Clear();
-            Host.Children.Add(_view.Section(tag));
+            Host.Content = _view.Section(tag);
             Scroller.ChangeView(null, 0, null, disableAnimation: true);
         }
     }
