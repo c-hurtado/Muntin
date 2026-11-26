@@ -317,6 +317,13 @@ namespace StageStripMotion
         return LRect(l, t, l + w, t + h);
     }
 
+    // The corner radius of the setting (stageStripRadius): 0 .. 40 pixels, anything else is cut to that
+    constexpr int MaxRadiusSetting = 40;
+    inline int RadiusOf(int setting)
+    {
+        return (std::max)(0, (std::min)(setting, MaxRadiusSetting));
+    }
+
     // The corner radius a tile can take
     inline int ClampRadius(int radius, int width, int height)
     {

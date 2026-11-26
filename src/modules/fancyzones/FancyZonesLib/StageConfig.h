@@ -23,9 +23,15 @@ namespace StageConfig
         int pairCut = 500; // thousandths, 150 .. 850
         int masterCut = 600;
         std::wstring rows; // master stack height shares, thousandths, comma separated; empty = equal
+        int stripCut = 150; // strip tile width, thousandths of the usable width, 100 .. 400 (per monitor, no global setting)
 
         bool operator==(const Values&) const = default;
     };
+
+    inline int ToStripPermille(double share)
+    {
+        return (std::max)(100, (std::min)(400, static_cast<int>(std::lround(share * 1000.0))));
+    }
 
     inline int ToPermille(double ratio)
     {
@@ -100,6 +106,11 @@ namespace StageConfig
             {
                 values.rows = *entry->second.rows;
             }
+
+            if (entry->second.stripCut)
+            {
+                values.stripCut = (std::max)(100, (std::min)(400, *entry->second.stripCut));
+            }
         }
 
         return values;
@@ -122,6 +133,11 @@ namespace StageConfig
         if (before.rows != after.rows)
         {
             change.rows = after.rows;
+        }
+
+        if (before.stripCut != after.stripCut)
+        {
+            change.stripCut = after.stripCut;
         }
 
         return change;
@@ -191,7 +207,10 @@ namespace StageConfig
         }
 
         // The strip scrolls: every window gets a tile, as long as at least one tile fits on the screen
-        const int fit = (std::max)(0, (plan.Area.H() + plan.Gap) / (plan.TileH + plan.Gap));
+        // A tile taller than the area (a wide strip beside the narrowed left window in pair) is cut at the area's edge, not a reason to
+        // refuse windows: the layout's tile size itself stays as the golden vectors have it
+        const int tileH = (std::min)(plan.TileH, plan.Area.H());
+        const int fit = (std::max)(0, (plan.Area.H() + plan.Gap) / (tileH + plan.Gap));
         return fit > 0 ? StripMaxWindows : slots;
     }
 
@@ -233,6 +252,7 @@ namespace StageConfig
             layout->SetCut((layout->Name() == "pair" ? v.pairCut : v.masterCut) / 1000.0);
         }
 
+        layout->SetStripShare(v.stripCut / 1000.0);
         layout->SetRows(Arrange::ParseRows(v.rows));
         return layout;
     }
@@ -244,6 +264,11 @@ namespace StageConfig
         if (layout.HasCut())
         {
             (layout.Name() == "pair" ? base.pairCut : base.masterCut) = ToPermille(layout.Cut());
+        }
+
+        if (layout.HasStrip(StripMaxWindows)) // only a layout with a strip owns its width
+        {
+            base.stripCut = ToStripPermille(layout.StripShare());
         }
 
         if (layout.Name() == "master")

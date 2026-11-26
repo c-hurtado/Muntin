@@ -47,34 +47,60 @@ namespace StageMouse
         double cut0{};
         std::vector<double> rows0;
         std::vector<int> rowH; // heights of the docked windows after the first
+        bool cutOk{}; // the layout has a cut and this window borders it (the shared-edge drag applies)
+        bool stripOk{}; // this window is the rightmost docked one of a layout with a strip: its right edge sets the strip width
+        double strip0{}; // the strip share at the start
+        int tileW0{}, areaW{}; // strip tile width in pixels at the start, and the usable width the share refers to
+        bool spanToStrip{}; // the cut span ends at the strip zone (pair with a strip): a wider strip shrinks the span, so the same ratio would move the cut
+        int spanR{}; // area's right edge (the span's right edge is that less the tile column and a gap)
+        int gap{};
     };
+
+    // The cut ratio that keeps the cut at pixel cutPx when the strip share is `share` (the span's right edge follows the strip). The layout
+    // clamps it to its range; without a strip-bound span the ratio from the start stays.
+    inline double CutKeepingPixel(const DragCtx& c, double share)
+    {
+        if (!c.cutOk || !c.spanToStrip || std::abs(share - c.strip0) < 1e-12) // unchanged share: the exact ratio from the start (no rounding jitter)
+        {
+            return c.cut0;
+        }
+
+        const LRect area(c.spanL, 0, c.spanR, 1);
+        const int right = c.spanR - StageLayouts::Metrics::TileWidth(area, share) - c.gap;
+        const int width = right - c.spanL;
+        return width > 0 ? (c.cutPx - c.spanL) / static_cast<double>(width) : c.cut0;
+    }
 
     // What a drag changes in a layout: compared tick to tick, so a tick that changes nothing moves nothing.
     struct Snapshot
     {
         double cut{};
+        double strip{};
         std::vector<double> rows;
 
-        bool operator==(const Snapshot& o) const { return std::abs(cut - o.cut) <= 1e-12 && rows == o.rows; }
+        bool operator==(const Snapshot& o) const { return std::abs(cut - o.cut) <= 1e-12 && std::abs(strip - o.strip) <= 1e-12 && rows == o.rows; }
     };
 
     inline void Take(const ILayout& layout, Snapshot& into)
     {
         into.cut = layout.Cut();
+        into.strip = layout.StripShare();
         layout.RowsInto(into.rows); // reuses the capacity after the first call
+    }
+
+    // The strip share after the right edge of the rightmost docked window moved by dx pixels (positive = right, the strip shrinks). The
+    // tile column is the part of the usable width right of that edge (less one gap, which stays), so the new width is the old one less dx.
+    // Pure ratio math: the layout clamps it again.
+    inline double StripShareAfterDrag(int tileW0, int areaW, int dx)
+    {
+        return StageLayouts::Metrics::ClampStripShare((tileW0 - dx) / static_cast<double>((std::max)(1, areaW))); // Capture only gives a usable area
     }
 
     // The window at docked slot `slot` of a stage with n windows and the given plan; nullopt when there is nothing to resize (the layout
     // has no cut, fewer than two docked windows, or the window is not docked).
     inline std::optional<DragCtx> Capture(const ILayout& layout, const Plan& plan, int slot, int n)
     {
-        if (!layout.HasCut() || plan.Docked < 2 || slot < 0 || slot >= plan.Docked || slot >= static_cast<int>(plan.Items.size()) || plan.Items[slot].Role == Role::Hidden)
-        {
-            return std::nullopt;
-        }
-
-        const LRect span = layout.CutSpan(plan.Area, plan.Strip, n);
-        if (span.W() <= 0)
+        if (slot < 0 || slot >= plan.Docked || slot >= static_cast<int>(plan.Items.size()) || plan.Items[slot].Role == Role::Hidden)
         {
             return std::nullopt;
         }
@@ -82,14 +108,32 @@ namespace StageMouse
         DragCtx c;
         c.slot = slot;
         c.n = n;
-        c.cutPx = plan.Items[0].Rect.R + plan.Gap / 2; // Metrics::Split: the cut sits half a gap right of the left window
-        c.spanL = span.L;
-        c.spanW = span.W();
+        c.strip0 = layout.StripShare();
+        // The strip edge: a layout with a strip showing, and the window next to it (the last docked slot)
+        c.stripOk = plan.HasStrip && slot == plan.Docked - 1 && plan.TileW > 0 && plan.Area.W() > 0;
+        c.tileW0 = plan.TileW;
+        c.areaW = plan.Area.W();
         c.cut0 = layout.Cut();
         c.rows0 = layout.Rows();
-        for (int i = 1; i < plan.Docked; i++)
+        const LRect span = layout.HasCut() && plan.Docked >= 2 ? layout.CutSpan(plan.Area, plan.Strip, n) : LRect();
+        c.cutOk = span.W() > 0;
+        if (c.cutOk)
         {
-            c.rowH.push_back(plan.Items[i].Rect.H());
+            c.cutPx = plan.Items[0].Rect.R + plan.Gap / 2; // Metrics::Split: the cut sits half a gap right of the left window
+            c.spanL = span.L;
+            c.spanW = span.W();
+            c.spanToStrip = span.R == plan.Strip.L;
+            c.spanR = plan.Area.R;
+            c.gap = plan.Gap;
+            for (int i = 1; i < plan.Docked; i++)
+            {
+                c.rowH.push_back(plan.Items[i].Rect.H());
+            }
+        }
+
+        if (!c.cutOk && !c.stripOk)
+        {
+            return std::nullopt;
         }
 
         return c;
@@ -106,6 +150,7 @@ namespace StageMouse
     {
         layout.SetCut(c.cut0);
         layout.SetRows(c.rows0);
+        layout.SetStripShare(c.strip0);
     }
 
     // A resize (the size changed), as opposed to a move
@@ -119,6 +164,7 @@ namespace StageMouse
     struct EdgeMove
     {
         int dx{}, dt{}, db{};
+        int stripDx{}; // the right edge of the window next to the strip moved by this much (its left edge stayed put)
         bool upperRow{}, lowerRow{}; // dt / db count as a row edge move (the window has a stack neighbour above / below)
     };
 
@@ -127,6 +173,16 @@ namespace StageMouse
         const bool lFix = std::abs(to.L - from.L) <= EdgeTolerance, rFix = std::abs(to.R - from.R) <= EdgeTolerance;
         const bool tFix = std::abs(to.T - from.T) <= EdgeTolerance, bFix = std::abs(to.B - from.B) <= EdgeTolerance;
         EdgeMove e;
+        if (c.stripOk && lFix)
+        {
+            e.stripDx = to.R - from.R;
+        }
+
+        if (!c.cutOk)
+        {
+            return e;
+        }
+
         e.dx = c.slot == 0 ? (lFix ? to.R - from.R : 0) : (rFix ? to.L - from.L : 0);
         if (c.slot >= 1)
         {
@@ -155,10 +211,20 @@ namespace StageMouse
         Restore(layout, c);
         const EdgeMove e = DetectEdge(c, from, to);
         bool changed = false;
+        if (e.stripDx != 0)
+        {
+            layout.SetStripShare(StripShareAfterDrag(c.tileW0, c.areaW, e.stripDx));
+            changed |= std::abs(layout.StripShare() - c.strip0) > 1e-6;
+            if (e.dx == 0)
+            {
+                layout.SetCut(CutKeepingPixel(c, layout.StripShare())); // the left window keeps its width: only the right one absorbs the change
+            }
+        }
+
         if (e.dx != 0)
         {
             layout.SetCut((c.cutPx + e.dx - c.spanL) / static_cast<double>(c.spanW));
-            changed = std::abs(layout.Cut() - c.cut0) > 1e-6;
+            changed |= std::abs(layout.Cut() - c.cut0) > 1e-6;
         }
 
         const int si = c.slot - 1;

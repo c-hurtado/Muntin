@@ -4,6 +4,7 @@
 #include "DockMotion.h"
 #include "StageStripMotion.h"
 
+#include <atomic>
 #include <future>
 #include <map>
 #include <mutex>
@@ -23,7 +24,7 @@ namespace
     constexpr UINT WaitMillis = 500;
     constexpr COLORREF TileColor = RGB(0x1B, 0x1B, 0x20); // as StageProto's strip
     constexpr COLORREF HoverColor = RGB(0x4A, 0x4A, 0x5C); // the tile under the cursor
-    constexpr int CornerRadius = 6; // StageProto's default
+    constexpr UINT WM_STRIP_RADIUS = WM_APP + 3;
     constexpr UINT_PTR AnimTimer = 1;
     constexpr UINT_PTR SettleTimer = 2;
     constexpr UINT AnimMillis = 16; // ~60 Hz, only while a tile moves
@@ -52,6 +53,7 @@ struct StageStrip::Impl
     std::vector<StageStripPlan::Strip> wanted;
     bool pending{};
     bool leaving{}; // the picture is the one of Leave: the scroll memory goes with it
+    std::atomic<int> radius{ 12 }; // the corner radius of the tiles (settings().stageStripRadius), read by the render thread
 
     // Render thread only
     struct Shown
@@ -151,6 +153,17 @@ struct StageStrip::Impl
             return 0;
         case WM_STRIP_STOP:
             PostQuitMessage(0);
+            return 0;
+        case WM_STRIP_RADIUS:
+            for (auto& s : self->shown)
+            {
+                if (s.overlay)
+                {
+                    ApplyRegion(s);
+                    InvalidateRect(s.overlay, nullptr, TRUE);
+                }
+            }
+
             return 0;
         case WM_TIMER:
             if (wparam == AnimTimer)
@@ -366,7 +379,7 @@ struct StageStrip::Impl
         {
             const auto it = s.motion.find(tile.window);
             const RECT r = Local(it != s.motion.end() ? it->second.cur : tile.rect, s.strip.area);
-            const int radius = StageStripMotion::ClampRadius(CornerRadius, r.right - r.left, r.bottom - r.top);
+            const int radius = StageStripMotion::ClampRadius(self->radius.load(),r.right - r.left, r.bottom - r.top);
             HRGN part = radius > 0 ? CreateRoundRectRgn(r.left, r.top, r.right + 1, r.bottom + 1, radius * 2, radius * 2) : nullptr;
             if (!part)
             {
@@ -912,6 +925,15 @@ int StageStrip::ScrollOffset(const std::wstring& key) const noexcept
     catch (...)
     {
         return 0;
+    }
+}
+
+void StageStrip::SetRadius(int pixels) noexcept
+{
+    const int radius = StageStripMotion::RadiusOf(pixels);
+    if (m_impl->radius.exchange(radius) != radius && m_impl->control)
+    {
+        PostMessageW(m_impl->control, WM_STRIP_RADIUS, 0, 0); // the regions are rebuilt on the render thread
     }
 }
 

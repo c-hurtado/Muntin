@@ -149,21 +149,25 @@ namespace StageLayouts
         virtual void SetRows(const std::vector<double>& value) = 0;
         virtual void RowsInto(std::vector<double>& out) const { out = Rows(); } // Rows() without a new vector: reuses out's capacity (drag ticks)
         virtual bool MoveRow(const std::vector<int>& heights, int upper, int deltaPx) = 0; // master: the edge between stack windows upper and upper + 1 moves by deltaPx (positive = down); false = nothing changed
+        virtual double StripShare() const = 0;               // width of a strip tile as a ratio of the usable width (layouts with a strip: stage, pair)
+        virtual void SetStripShare(double) {}                // keeps it in Metrics::MinStripShare .. MaxStripShare
     };
 
     struct Metrics
     {
-        static constexpr double StripShare = 0.15, DefaultMasterShare = 0.60;
+        static constexpr double StripShare = 0.15, DefaultMasterShare = 0.60; // StripShare: the default strip width
+        static constexpr double MinStripShare = 0.10, MaxStripShare = 0.40;   // the range the user can drag the strip width to
         static constexpr int DefaultMaxStack = 4;
-        // Width of a strip tile: 15% of the usable width. The strip zone is the tile column plus one gap on its left, from
-        // the top to the bottom of the work area; it only depends on work area and spacing, never on the window count.
+        static double ClampStripShare(double v) { return (std::max)(MinStripShare, (std::min)(MaxStripShare, v)); }
+        // Width of a strip tile: share (15% by default) of the usable width. The strip zone is the tile column plus one gap on its left, from
+        // the top to the bottom of the work area; it only depends on work area, spacing and share, never on the window count.
         static int Round(double x) { return static_cast<int>(std::lround(x)); } // half away from zero, as Muntin's DockTree uses
-        static int TileWidth(const LRect& area) { return (std::max)(1, Round(area.W() * StripShare)); }
-        static LRect StripZone(const LRect& work, Spacing sp)
+        static int TileWidth(const LRect& area, double share = StripShare) { return (std::max)(1, Round(area.W() * share)); }
+        static LRect StripZone(const LRect& work, Spacing sp, double share = StripShare)
         {
             sp = sp.Clamped();
             LRect a = sp.Inset(work);
-            return LRect(a.R - TileWidth(a) - sp.Gap, work.T, work.R, work.B);
+            return LRect(a.R - TileWidth(a, share) - sp.Gap, work.T, work.R, work.B);
         }
         // Muntin's split: the cut sits at ratio of the width, the gap is shared around it (first side loses gap/2, the
         // second gap - gap/2), so the space between the two is exactly gap.
@@ -187,6 +191,8 @@ namespace StageLayouts
         bool MoveRow(const std::vector<int>&, int, int) override { return false; }
         bool HasStrip(int n) const override { return n > Slots(n); }
         bool UsesMinSizes() const override { return false; }
+        double StripShare() const override { return stripShare; }
+        void SetStripShare(double v) override { stripShare = Metrics::ClampStripShare(v); }
 
         Plan Compute(const LayoutInput& inp) const override
         {
@@ -205,7 +211,7 @@ namespace StageLayouts
                 }
             }
             int n = static_cast<int>(vis.size()), gap = sp.Gap;
-            LRect zone = Metrics::StripZone(w, sp);
+            LRect zone = Metrics::StripZone(w, sp, stripShare);
             std::vector<LRect> docks = n > 0 ? Docks(a, zone, gap, vw) : std::vector<LRect>();
             int k = static_cast<int>(docks.size());
             p.Gap = gap;
@@ -216,7 +222,7 @@ namespace StageLayouts
             p.Park = !docks.empty() ? docks[0] : a;
             if (p.HasStrip)
             {
-                p.TileW = Metrics::TileWidth(a);
+                p.TileW = Metrics::TileWidth(a, stripShare);
                 p.TileH = (std::max)(1, Metrics::Round(p.TileW * static_cast<double>(p.Park.H()) / p.Park.W()));
             }
             int v = 0;
@@ -333,6 +339,9 @@ namespace StageLayouts
             auto it = std::find(o.begin(), o.end(), id);
             return it == o.end() ? -1 : static_cast<int>(it - o.begin());
         }
+
+    private:
+        double stripShare = Metrics::StripShare; // only stage and pair show a strip; master ignores it
     };
 
     // One main window (the whole usable area when alone), plus a strip of tiles on the right once there are two or more windows.

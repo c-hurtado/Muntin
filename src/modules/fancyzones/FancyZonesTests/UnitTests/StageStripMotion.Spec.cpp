@@ -174,6 +174,10 @@ namespace StageStripMotionUnitTests
             Assert::AreEqual(5, ClampRadius(6, 10, 100));
             Assert::AreEqual(0, ClampRadius(6, 1, 1));
             Assert::AreEqual(0, ClampRadius(-3, 100, 100));
+            Assert::AreEqual(12, RadiusOf(12));
+            Assert::AreEqual(0, RadiusOf(-5), L"below the range");
+            Assert::AreEqual(40, RadiusOf(99), L"above the range");
+            Assert::AreEqual(40, RadiusOf(40));
         }
 
         TEST_METHOD(HitTestUsesTheDrawnRectDuringAnimation)

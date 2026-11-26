@@ -25,6 +25,9 @@ public:
     // find the tile under the mouse. A short lock; 0 for a strip that is not shown.
     int ScrollOffset(const std::wstring& key) const noexcept;
 
+    // The corner radius of the tiles in pixels (cut to 0 .. 40). A change reshapes the strips shown at once; never waits.
+    void SetRadius(int pixels) noexcept;
+
     // The strips to show from now on (all of them: a strip that is missing is removed). Empty: nothing shown.
     // wait: returns once the picture is applied, at most half a second (Leave). Otherwise it never waits.
     void Publish(std::vector<StageStripPlan::Strip> strips, bool wait = false) noexcept;

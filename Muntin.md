@@ -256,9 +256,9 @@ These settings exist only in the fork. See "Stage mode" above.
 | `fancyzones_stagePairCut` | Where the vertical edge of the Pair layout sits, in thousandths of the usable width | 500 | 150 to 850 |
 | `fancyzones_stageMasterCut` | The same for the Master layout (the main window's share) | 600 | 150 to 850 |
 | `fancyzones_stageRows` | Master layout: the heights of the stack windows as shares in thousandths, comma separated (for example `"500,300,200"`). Empty means equal heights. | `""` | |
-| `fancyzones_stageMonitors` | What single monitors override: an object from monitor key to `pairCut`, `masterCut` and `rows` (each optional, a missing one follows the global setting above) | none | cuts 150 to 850 |
+| `fancyzones_stageMonitors` | What single monitors override: an object from monitor key to `pairCut`, `masterCut`, `rows` and `stripCut` (each optional, a missing one follows the global setting above; `stripCut` has no global value, the default is 150) | none | cuts 150 to 850, `stripCut` 100 to 400 |
 
-The three global values are the defaults. Dragging a shared edge saves into `fancyzones_stageMonitors` for that monitor only. The key of a monitor is its display device id and instance id joined with an underscore (`<device id>_<instance id>`, from the display lookup, no serial number). When the lookup can't identify a monitor, the key is `@left,top` of its screen position, for example `@0,0`. The easiest way to get a real key is to drag an edge on that monitor once and read `settings.json`. Example:
+The three global values are the defaults. Dragging a shared edge saves into `fancyzones_stageMonitors` for that monitor only. So does dragging the outer (right) edge of the rightmost docked window in the Stage and Pair layouts: it sets the strip width (`stripCut`, thousandths of the usable width, 100 to 400, default 150). The key of a monitor is its display device id and instance id joined with an underscore (`<device id>_<instance id>`, from the display lookup, no serial number). When the lookup can't identify a monitor, the key is `@left,top` of its screen position, for example `@0,0`. The easiest way to get a real key is to drag an edge on that monitor once and read `settings.json`. Example:
 
 ```json
 "fancyzones_stageMonitors": {

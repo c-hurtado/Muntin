@@ -49,6 +49,7 @@ namespace
 
     const Choice MotionChoices[] = { { 0, L"Spring" }, { 1, L"Ease" } };
     const Choice PromoteChoices[] = { { 0, L"Grow from the tile" }, { 1, L"Crossfade" } };
+    const Choice RadiusChoices[] = { { 0, L"Square" }, { 6, L"Small" }, { 12, L"Medium" }, { 20, L"Large" }, { 30, L"Round" } };
     const Choice ArrangeChoices[] = { { 0, L"Dock (drag to dock windows)" }, { 1, L"Stage (one main window, the rest in a strip)" } };
     const wchar_t* const StageLayoutNames[] = { L"master", L"stage", L"pair" };
     const wchar_t* const StageLayoutLabels[] = { L"Master and stack", L"Stage with strip", L"Pair with strip" };
@@ -86,6 +87,7 @@ namespace
         ArrangeBase = 500,
         StageLayoutBase = 600,
         PromoteBase = 700,
+        RadiusBase = 800,
     };
 
     HINSTANCE s_instance{};
@@ -879,6 +881,7 @@ namespace
         }
 
         AppendMenuW(menu, MF_POPUP | (settings.dockAnimation && settings.stageAnimatePromote ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(ChoiceMenu(PromoteChoices, std::size(PromoteChoices), settings.stagePromoteStyle, PromoteBase)), L"Promote animation");
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(RadiusChoices, std::size(RadiusChoices), settings.stageStripRadius, RadiusBase)), L"Strip corner radius");
 
         HMENU arrange = ChoiceMenu(ArrangeChoices, std::size(ArrangeChoices), settings.arrangeMode == 1 ? 1 : 0, ArrangeBase);
         AppendMenuW(arrange, MF_SEPARATOR, 0, nullptr);
@@ -934,6 +937,10 @@ namespace
         else if (command >= PromoteBase && command - PromoteBase < std::size(PromoteChoices))
         {
             saved = FancyZonesSettings::SaveValue(NonLocalizable::StagePromoteStyleID, json::value(PromoteChoices[command - PromoteBase].value));
+        }
+        else if (command >= RadiusBase && command - RadiusBase < std::size(RadiusChoices))
+        {
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::StageStripRadiusID, json::value(RadiusChoices[command - RadiusBase].value));
         }
         else if (command >= PagesBase && command - PagesBase < std::size(PageChoices))
         {

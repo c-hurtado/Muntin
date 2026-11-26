@@ -860,7 +860,9 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
 
     const auto plan = ComputePlan(stage);
     const auto oldStrip = stage.strip; // the tiles as they were shown: where a promoted window's glide may start
-    if (!dockedOnly)
+    // The preview of a strip-width drag also lays the tile column out again each tick (the tiles follow the new share live)
+    const bool stripLive = dockedOnly && m_drag && m_drag->ctx && m_drag->ctx->stripOk;
+    if (!dockedOnly || stripLive)
     {
         stage.strip = StageStripPlan::Build(
             StageStripPlan::KeyOf(stage.monitor.rect), plan,
@@ -883,7 +885,10 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
             stage.strip->layout = stage.layout->Name();
         }
 
-        stage.stripHidden = StripCovered(stage);
+        if (!dockedOnly)
+        {
+            stage.stripHidden = StripCovered(stage);
+        }
     }
 
     const auto monitors = MonitorRects();
@@ -1193,6 +1198,11 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
 
     if (dockedOnly)
     {
+        if (stripLive)
+        {
+            SyncStrip(); // only the picture for the renderer thread
+        }
+
         return; // A drag preview: no timers, no verification; the drop lands the whole stage
     }
 
@@ -1220,6 +1230,7 @@ void StageMode::SyncStrip()
         return;
     }
 
+    m_strip->SetRadius(FancyZonesSettings::settings().stageStripRadius);
     std::vector<StageStripPlan::Strip> strips;
     for (const auto& stage : m_stages)
     {
@@ -2964,6 +2975,11 @@ void StageMode::SettingsChanged() noexcept
         if (!m_active)
         {
             return;
+        }
+
+        if (m_strip)
+        {
+            m_strip->SetRadius(FancyZonesSettings::settings().stageStripRadius); // no relayout needed, also during a drag
         }
 
         if (m_drag)

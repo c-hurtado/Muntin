@@ -187,6 +187,11 @@ void FancyZonesSettings::LoadSettings()
             m_settings.stagePromoteStyle = std::clamp(*val, 0, 1);
         }
 
+        if (auto val = values.get_int_value(NonLocalizable::StageStripRadiusID))
+        {
+            m_settings.stageStripRadius = std::clamp(*val, 0, 40);
+        }
+
         if (auto val = values.get_bool_value(NonLocalizable::DockMiddleClickExpandID))
         {
             m_settings.dockMiddleClickExpand = *val;
@@ -509,6 +514,11 @@ std::map<std::wstring, StageMonitorValues> FancyZonesSettings::ParseStageMonitor
             values.rows = entry.GetNamedString(L"rows").c_str();
         }
 
+        if (json::has(entry, L"stripCut", json::JsonValueType::Number))
+        {
+            values.stripCut = ClampJsonNumber(entry.GetNamedNumber(L"stripCut"), 100, 400);
+        }
+
         if (!values.Empty())
         {
             result[pair.Key().c_str()] = std::move(values);
@@ -534,6 +544,11 @@ json::JsonObject FancyZonesSettings::StageMonitorJson(const StageMonitorValues& 
     if (values.rows)
     {
         entry.SetNamedValue(L"rows", json::value(*values.rows));
+    }
+
+    if (values.stripCut)
+    {
+        entry.SetNamedValue(L"stripCut", json::value(*values.stripCut));
     }
 
     return entry;

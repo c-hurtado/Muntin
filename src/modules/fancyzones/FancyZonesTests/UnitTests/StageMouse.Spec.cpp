@@ -86,10 +86,141 @@ namespace StageMouseTests
             Assert::IsFalse(two.Capture(2).has_value()); // not a docked slot
             Assert::IsFalse(two.Capture(-1).has_value());
 
-            // the stage layout has no cut
+            // the stage layout has no cut: with a strip showing its main window can still drag the strip edge, alone it cannot
             auto stage = StageLayouts::MakeStage();
             const auto plan = stage->Compute(Input(3));
-            Assert::IsFalse(StageMouse::Capture(*stage, plan, 0, 3).has_value());
+            const auto sc = StageMouse::Capture(*stage, plan, 0, 3);
+            Assert::IsTrue(sc.has_value());
+            Assert::IsFalse(sc->cutOk);
+            Assert::IsTrue(sc->stripOk);
+            Assert::IsFalse(StageMouse::Capture(*stage, stage->Compute(Input(1)), 0, 1).has_value());
+        }
+
+        TEST_METHOD(StripWidthFollowsTheRightEdgeOfTheLastDockedWindowInStage)
+        {
+            auto stage = StageLayouts::MakeStage();
+            const auto plan = stage->Compute(Input(3));
+            const auto c = StageMouse::Capture(*stage, plan, 0, 3);
+            const LRect from = plan.Items[0].Rect;
+            Assert::AreEqual(150, plan.TileW); // 15% of 1000
+            Assert::IsTrue(StageMouse::ResizeEdge(*stage, *c, from, Edge(from, 0, 0, -50, 0))); // edge left: strip grows
+            Assert::AreEqual(0.20, stage->StripShare(), 1e-9);
+            Assert::AreEqual(200, stage->Compute(Input(3)).TileW);
+            Assert::IsTrue(StageMouse::ResizeEdge(*stage, *c, from, Edge(from, 0, 0, 30, 0))); // always from the start
+            Assert::AreEqual(0.12, stage->StripShare(), 1e-9);
+            Assert::IsFalse(StageMouse::ResizeEdge(*stage, *c, from, from));
+            Assert::AreEqual(0.15, stage->StripShare(), 1e-12);
+            // the window's left edge, top and bottom edges: nothing
+            Assert::IsFalse(StageMouse::ResizeEdge(*stage, *c, from, Edge(from, -50, 0, 0, 0)));
+            Assert::IsFalse(StageMouse::ResizeEdge(*stage, *c, from, Edge(from, 0, -50, 0, 0)));
+            Assert::AreEqual(0.15, stage->StripShare(), 1e-12);
+        }
+
+        TEST_METHOD(StripWidthIsClampedAndPairOnlyUsesItsRightWindow)
+        {
+            auto pair = StageLayouts::MakePair();
+            const auto plan = pair->Compute(Input(4));
+            const auto c1 = StageMouse::Capture(*pair, plan, 1, 4);
+            const LRect from = plan.Items[1].Rect;
+            Assert::IsTrue(c1->stripOk && c1->cutOk);
+            Assert::IsTrue(StageMouse::ResizeEdge(*pair, *c1, from, Edge(from, 0, 0, -900, 0)));
+            Assert::AreEqual(0.40, pair->StripShare(), 1e-9);
+            Assert::IsTrue(StageMouse::ResizeEdge(*pair, *c1, from, Edge(from, 0, 0, 900, 0)));
+            Assert::AreEqual(0.10, pair->StripShare(), 1e-9);
+            Assert::IsTrue(std::abs(pair->Compute(Input(4)).Items[0].Rect.R - plan.Items[0].Rect.R) <= 1, L"the cut ratio follows the strip, the cut pixel stays");
+            // the shared edge still moves the cut, not the strip
+            Assert::IsTrue(StageMouse::ResizeEdge(*pair, *c1, from, Edge(from, -40, 0, 0, 0)));
+            Assert::AreEqual(0.15, pair->StripShare(), 1e-12);
+            // the left window is not next to the strip
+            const auto c0 = StageMouse::Capture(*pair, plan, 0, 4);
+            Assert::IsFalse(c0->stripOk);
+            StageMouse::ResizeEdge(*pair, *c0, plan.Items[0].Rect, Edge(plan.Items[0].Rect, 0, 0, -50, 0)); // its right edge is the cut
+            Assert::AreEqual(0.15, pair->StripShare(), 1e-12);
+        }
+
+        TEST_METHOD(NoStripNoStripEdge)
+        {
+            // pair with two windows and master have no strip: the right edge is an outer edge
+            auto pair = StageLayouts::MakePair();
+            const auto plan = pair->Compute(Input(2));
+            const auto c = StageMouse::Capture(*pair, plan, 1, 2);
+            Assert::IsFalse(c->stripOk);
+            Assert::IsFalse(StageMouse::ResizeEdge(*pair, *c, plan.Items[1].Rect, Edge(plan.Items[1].Rect, 0, 0, -50, 0)));
+            Fixture m(3);
+            for (int slot = 0; slot < 3; slot++)
+            {
+                Assert::IsFalse(m.Capture(slot)->stripOk);
+            }
+
+            const auto c1 = m.Capture(1);
+            Assert::IsFalse(StageMouse::ResizeEdge(m.layout, *c1, m.Rect(1), Edge(m.Rect(1), 0, 0, -50, 0)));
+            Assert::AreEqual(0.15, m.layout.StripShare(), 1e-12);
+        }
+
+        TEST_METHOD(PairStripDragKeepsTheLeftWindowWhereItIs)
+        {
+            auto pair = StageLayouts::MakePair();
+            const auto plan = pair->Compute(Input(3)); // 2 docked + 1 tile
+            const auto c = StageMouse::Capture(*pair, plan, 1, 3);
+            Assert::IsTrue(c->spanToStrip);
+            const LRect from = plan.Items[1].Rect;
+            for (const int dx : { -40, -150, 30, -900, 900 })
+            {
+                Assert::IsTrue(StageMouse::ResizeEdge(*pair, *c, from, Edge(from, 0, 0, dx, 0)) || std::abs(pair->StripShare() - 0.15) < 1e-9);
+                const auto now = pair->Compute(Input(3));
+                Assert::IsTrue(std::abs(now.Items[0].Rect.R - plan.Items[0].Rect.R) <= 1, L"the left window keeps its right edge");
+                Assert::AreEqual(plan.Items[0].Rect.L, now.Items[0].Rect.L);
+            }
+
+            // back at the start (Esc): exactly as before
+            StageMouse::Restore(*pair, *c);
+            Assert::AreEqual(0.15, pair->StripShare(), 1e-12);
+            Assert::AreEqual(0.5, pair->Cut(), 1e-12);
+
+            // two windows (no strip): the strip is not a thing, no compensation
+            const auto twoPlan = pair->Compute(Input(2));
+            const auto two = StageMouse::Capture(*pair, twoPlan, 1, 2);
+            Assert::IsFalse(two->spanToStrip);
+            Assert::AreEqual(two->cut0, StageMouse::CutKeepingPixel(*two, 0.3), 1e-12);
+        }
+
+        TEST_METHOD(CutCompensationRespectsTheCutClamp)
+        {
+            auto pair = StageLayouts::MakePair();
+            pair->SetCut(0.80);
+            const auto plan = pair->Compute(Input(3));
+            const auto c = StageMouse::Capture(*pair, plan, 1, 3);
+            // the strip grows: the span shrinks, so the pixel's ratio would pass 0.85; the layout clamps it
+            const double wanted = StageMouse::CutKeepingPixel(*c, 0.40);
+            Assert::IsTrue(wanted > 0.80);
+            pair->SetStripShare(0.40);
+            pair->SetCut(wanted);
+            Assert::IsTrue(pair->Cut() <= 0.85 + 1e-12);
+            Assert::AreEqual(c->cut0, StageMouse::CutKeepingPixel(*c, c->strip0), 1e-12, L"unchanged share: the start ratio");
+        }
+
+        TEST_METHOD(StripShareMathAndClamp)
+        {
+            Assert::AreEqual(0.20, StageMouse::StripShareAfterDrag(150, 1000, -50), 1e-12);
+            Assert::AreEqual(0.40, StageMouse::StripShareAfterDrag(150, 1000, -5000), 1e-12);
+            Assert::AreEqual(0.10, StageMouse::StripShareAfterDrag(150, 1000, 5000), 1e-12);
+            Assert::AreEqual(0.40, StageMouse::StripShareAfterDrag(150, 0, 10), 1e-12, L"no usable width: no division by zero, clamped");
+            auto stage = StageLayouts::MakeStage();
+            stage->SetStripShare(0.9);
+            Assert::AreEqual(0.40, stage->StripShare(), 1e-12);
+            stage->SetStripShare(0.0);
+            Assert::AreEqual(0.10, stage->StripShare(), 1e-12);
+        }
+
+        TEST_METHOD(AStripEdgeDragIsAResizeDrop)
+        {
+            StageMouse::DropFacts f;
+            f.resized = true;
+            f.intent = StageMouse::Intent::Size;
+            f.edgeChanged = true; // ResizeEdge reports a strip change the same way
+            Assert::IsTrue(StageMouse::PlanDrop(f).action == StageMouse::Drop::ResizeEdge);
+            f.edgeChanged = false; // an outer edge, Master included
+            Assert::IsTrue(StageMouse::PlanDrop(f).action == StageMouse::Drop::SnapBack);
         }
 
         TEST_METHOD(CutPixelsAreTheEdgeBetweenMasterAndStack)

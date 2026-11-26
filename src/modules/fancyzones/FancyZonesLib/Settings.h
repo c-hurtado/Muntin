@@ -17,8 +17,9 @@ struct StageMonitorValues
     std::optional<int> pairCut; // thousandths, 150 .. 850
     std::optional<int> masterCut;
     std::optional<std::wstring> rows;
+    std::optional<int> stripCut; // strip tile width as thousandths of the usable width, 100 .. 400 (per monitor only, no global value)
 
-    bool Empty() const noexcept { return !pairCut && !masterCut && !rows; }
+    bool Empty() const noexcept { return !pairCut && !masterCut && !rows && !stripCut; }
     // The set fields of change replace the ones here; the others stay
     void Overlay(const StageMonitorValues& change)
     {
@@ -35,6 +36,11 @@ struct StageMonitorValues
         if (change.rows)
         {
             rows = change.rows;
+        }
+
+        if (change.stripCut)
+        {
+            stripCut = change.stripCut;
         }
     }
 
@@ -117,6 +123,7 @@ struct Settings
     bool dockAnticipation = false; // A small pull back before the move
     bool stageAnimatePromote = false; // Promoting a window out of the Stage strip glides (needs Animations)
     int stagePromoteStyle = 0; // How: 0 grow from the strip tile, 1 crossfade
+    int stageStripRadius = 12; // Corner radius of the Stage strip tiles in pixels, 0 .. 40
     bool dockMiddleClickExpand = true; // A middle click on a title bar expands its window into the empty space
     bool desktopScrollOverview = false; // Scrolling the desktop zooms out to the pages, and ends on a page
     int desktopScrollPages = 2; // Pages each monitor scrolls through, the first included, at most MaxDesktopScrollPages. 1: no scrolling.

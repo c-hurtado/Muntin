@@ -25,6 +25,7 @@ Win+Left and Win+Right rotate (hold to repeat); Win+Up promotes the focused wind
 - Drag the shared edge: neighbors follow live; on release the cut is saved (under `fancyzones_stageMonitors` for that monitor). Esc during the drag puts it back.
 - Drag a title bar onto another window's place: they swap. Drop on empty desktop: snaps back.
 - Snap-to-edge must not change the cut: drag a window to a screen edge so Windows snaps it (Aero Snap, Snap Layouts): it snaps back to its slot and `settings.json` shows no new cut.
+- Strip width (Stage and Pair layouts, 3 or more windows in Pair, 2 or more in Stage): drag the right edge of the rightmost docked window (the one next to the strip). The docked windows and the strip tiles follow live, between 10% and 40% of the usable width; Esc puts it back; on release `settings.json` has `stripCut` under that monitor only. The same drag of the right edge in Master, of the right edge with no strip showing (Pair with two windows), or of any other outer edge snaps back.
 - In Stage or Pair, click a strip tile: that window becomes the main one.
 
 ## 5. Cross monitor

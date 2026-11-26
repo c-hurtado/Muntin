@@ -755,6 +755,28 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(size_t{ 1 }, monitors.size(), L"an empty change adds no entry");
         }
 
+        TEST_METHOD (StripWidthIsPerMonitorAndOwnedByLayoutsWithAStrip)
+        {
+            StageConfig::Values global;
+            global.layout = L"pair";
+            std::map<std::wstring, StageMonitorValues> monitors;
+            monitors[L"A"].stripCut = 5000; // clamped to 400
+            Assert::AreEqual(150, StageConfig::Resolve(global, monitors, L"B").stripCut);
+            const auto a = StageConfig::Resolve(global, monitors, L"A");
+            Assert::AreEqual(400, a.stripCut);
+            auto layout = StageConfig::MakeLayout(a);
+            Assert::AreEqual(0.4, layout->StripShare(), 1e-9);
+            layout->SetStripShare(0.22);
+            const auto after = StageConfig::Read(*layout, a);
+            Assert::AreEqual(220, after.stripCut);
+            Assert::AreEqual(220, *StageConfig::MonitorChange(a, after).stripCut);
+            Assert::IsFalse(StageConfig::MonitorChange(a, after).pairCut.has_value());
+
+            global.layout = L"master";
+            auto master = StageConfig::MakeLayout(StageConfig::Resolve(global, monitors, L"A"));
+            Assert::AreEqual(220, StageConfig::Read(*master, after).stripCut, L"master has no strip: the saved width is left alone");
+        }
+
         TEST_METHOD (StageMonitorsSaveAndLoadInATempFile)
         {
             TempFolder temp;
@@ -782,6 +804,20 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(monitors.at(L"DELA0B1_UID1").pairCut.has_value());
             Assert::AreEqual(300, *monitors.at(L"@1920,0").pairCut);
             Assert::IsFalse(monitors.at(L"@1920,0").masterCut.has_value());
+
+            // stripCut: saved with the rest of the entry, read back, clamped to 100 .. 400, and ignored when it is no number
+            StageMonitorValues wide;
+            wide.stripCut = 250;
+            Assert::IsTrue(FancyZonesSettings::SaveStageMonitor(L"DELA0B1_UID1", wide, file));
+            const auto again = json::from_file(file);
+            const auto reread = FancyZonesSettings::ParseStageMonitors(again->GetNamedObject(L"properties").GetNamedObject(NonLocalizable::StageMonitorsID).GetNamedObject(L"value"));
+            Assert::AreEqual(250, *reread.at(L"DELA0B1_UID1").stripCut);
+            Assert::AreEqual(450, *reread.at(L"DELA0B1_UID1").masterCut, L"the other fields of the entry stay");
+            const auto clamped = FancyZonesSettings::ParseStageMonitors(json::JsonObject::Parse(L"{\"A\":{\"stripCut\":5000},\"B\":{\"stripCut\":-3},\"C\":{\"stripCut\":\"250\",\"pairCut\":300}}"));
+            Assert::AreEqual(400, *clamped.at(L"A").stripCut);
+            Assert::AreEqual(100, *clamped.at(L"B").stripCut);
+            Assert::IsFalse(clamped.at(L"C").stripCut.has_value(), L"a string is not a number");
+            Assert::AreEqual(300, *clamped.at(L"C").pairCut);
         }
 
         TEST_METHOD (LoadSettingsOldFormatAndMissingKeyClear)
@@ -944,6 +980,21 @@ namespace FancyZonesUnitTests
             const int pairCap = StageConfig::CapacityOf(*StageLayouts::MakePair(), work, spacing);
             Assert::AreEqual(StageConfig::StripMaxWindows, stageCap, L"the strip scrolls: every window is taken");
             Assert::AreEqual(StageConfig::StripMaxWindows, pairCap);
+
+            // A wide strip in pair: the tiles would be taller than the area (the left window narrows), but one always fits
+            auto widePair = StageLayouts::MakePair();
+            widePair->SetStripShare(0.4);
+            StageLayouts::LayoutInput wide;
+            wide.Work = work;
+            for (int i = 1; i <= 3; i++)
+            {
+                wide.Wins.emplace_back(i);
+            }
+
+            const auto widePlan = widePair->Compute(wide);
+            Assert::IsTrue(widePlan.HasStrip);
+            Assert::IsTrue(widePlan.TileH > widePlan.Area.H(), L"the tile is taller than the area at this share (the case under test)");
+            Assert::AreEqual(StageConfig::StripMaxWindows, StageConfig::CapacityOf(*widePair, work, spacing), L"windows past the first two are still taken");
 
             Assert::IsTrue(StageConfig::HasRoom(0, 9));
             Assert::IsTrue(StageConfig::HasRoom(8, 9));
