@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include <filesystem>
+#include <fstream>
 
 #include <FancyZonesLib/Arrange.h>
 #include <FancyZonesLib/Settings.h>
@@ -49,8 +50,113 @@ namespace FancyZonesUnitTests
             stage.arrangeMode = 1;
             FancyZonesSettings::instance().SetSettings(stage);
             Assert::IsTrue(Arrange::IsStage());
-            FancyZonesSettings::instance().SetSettings(Settings{});
+            Settings dock;
+            dock.arrangeMode = 0;
+            FancyZonesSettings::instance().SetSettings(dock);
             Assert::IsFalse(Arrange::IsStage());
+        }
+
+        TEST_METHOD (FreshInstallIsStageWithStrip)
+        {
+            Assert::AreEqual(1, Settings{}.arrangeMode, L"Stage mode");
+            Assert::AreEqual(std::wstring(L"stage"), Settings{}.stageLayout, L"the stage layout");
+            Assert::AreEqual(1, Settings{}.stagePromoteStyle, L"promote crossfades");
+        }
+
+        TEST_METHOD (FirstLoadWithoutAFileIsStageAndWritesItDown)
+        {
+            const auto file = FancyZonesSettings::GetSettingsFileName();
+            std::filesystem::remove(file);
+            Settings dock;
+            dock.arrangeMode = 0;
+            dock.stageLayout = L"pair";
+            FancyZonesSettings::instance().SetSettings(dock);
+            FancyZonesSettings::instance().ForgetLoaded();
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(1, FancyZonesSettings::settings().arrangeMode);
+            Assert::AreEqual(std::wstring(L"stage"), FancyZonesSettings::settings().stageLayout);
+
+            // Written down: a file another setting makes later still says Stage
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::DockGapID, json::value(5), file));
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(1, FancyZonesSettings::settings().arrangeMode);
+            Assert::AreEqual(std::wstring(L"stage"), FancyZonesSettings::settings().stageLayout);
+        }
+
+        TEST_METHOD (FirstLoadOfAnUnreadableFileIsDock)
+        {
+            const auto file = FancyZonesSettings::GetSettingsFileName();
+            {
+                std::wofstream out(file);
+                out << L"{ not json";
+            }
+
+            FancyZonesSettings::instance().SetSettings(Settings{});
+            FancyZonesSettings::instance().ForgetLoaded();
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(0, FancyZonesSettings::settings().arrangeMode);
+            Assert::AreEqual(std::wstring(L"master"), FancyZonesSettings::settings().stageLayout);
+
+            // Later, a file that can't be read (an editor saving it) changes nothing
+            Settings stage;
+            FancyZonesSettings::instance().SetSettings(stage);
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(1, FancyZonesSettings::settings().arrangeMode);
+        }
+
+        TEST_METHOD (AFileWithoutTheKeysIsDockAndMaster)
+        {
+            const auto file = FancyZonesSettings::GetSettingsFileName();
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::DockGapID, json::value(5), file));
+            FancyZonesSettings::instance().SetSettings(Settings{});
+            FancyZonesSettings::instance().ForgetLoaded();
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(0, FancyZonesSettings::settings().arrangeMode);
+            Assert::AreEqual(std::wstring(L"master"), FancyZonesSettings::settings().stageLayout);
+
+            // Stage without a layout: master, as before
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::ArrangeModeID, json::value(1), file));
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(1, FancyZonesSettings::settings().arrangeMode);
+            Assert::AreEqual(std::wstring(L"master"), FancyZonesSettings::settings().stageLayout);
+
+            Assert::AreEqual(1, ArrangeFallback::For(false).arrangeMode);
+            Assert::AreEqual(std::wstring(L"stage"), std::wstring(ArrangeFallback::For(false).stageLayout));
+        }
+
+        TEST_METHOD (SaveValuesWritesTheModeAndLayoutAtOnce)
+        {
+            const auto file = FancyZonesSettings::GetSettingsFileName();
+            Settings dock;
+            dock.arrangeMode = 0;
+            dock.stageLayout = L"master";
+            FancyZonesSettings::instance().SetSettings(dock);
+            Assert::IsTrue(FancyZonesSettings::SaveValue(NonLocalizable::DockGapID, json::value(5), file));
+            Assert::IsTrue(FancyZonesSettings::SaveValues({ { NonLocalizable::StageLayoutID, json::value(L"pair") }, { NonLocalizable::ArrangeModeID, json::value(1) } }, file));
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(1, FancyZonesSettings::settings().arrangeMode);
+            Assert::AreEqual(std::wstring(L"pair"), FancyZonesSettings::settings().stageLayout);
+            Assert::AreEqual(5, FancyZonesSettings::settings().dockGap, L"the other keys stay");
+
+            // Dock leaves the layout as it is
+            Assert::IsTrue(FancyZonesSettings::SaveValues({ { NonLocalizable::ArrangeModeID, json::value(0) } }, file));
+            FancyZonesSettings::instance().LoadSettings();
+            Assert::AreEqual(0, FancyZonesSettings::settings().arrangeMode);
+            Assert::AreEqual(std::wstring(L"pair"), FancyZonesSettings::settings().stageLayout);
+        }
+
+        TEST_METHOD (SaveValuesKeepsAnUnreadableFile)
+        {
+            const auto file = FancyZonesSettings::GetSettingsFileName();
+            {
+                std::wofstream out(file);
+                out << L"{ not json";
+            }
+
+            Assert::IsFalse(FancyZonesSettings::SaveValues({ { NonLocalizable::ArrangeModeID, json::value(0) } }, file));
+            std::wifstream in(file);
+            std::wstring text((std::istreambuf_iterator<wchar_t>(in)), std::istreambuf_iterator<wchar_t>());
+            Assert::AreEqual(std::wstring(L"{ not json"), text);
         }
 
         TEST_METHOD (CombineRules)

@@ -55,11 +55,28 @@ void FancyZonesSettings::LoadSettings()
 {
     _TRACER_;
 
+    // The first load of the process decides between a fresh install and an existing one
+    const bool first = !m_loaded;
+    m_loaded = true;
     try
     {
-        auto jsonOpt = json::from_file(GetSettingsFileName());
+        const auto file = GetSettingsFileName();
+        auto jsonOpt = json::from_file(file);
         if (!jsonOpt)
         {
+            const bool exists = GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES;
+            if (first)
+            {
+                // No file: a fresh install. A file that can't be read: an existing install.
+                const auto fallback = ArrangeFallback::For(exists);
+                SetArrange(fallback.arrangeMode, fallback.stageLayout);
+                if (!exists)
+                {
+                    // Written down, so the file another setting creates later still says Stage
+                    SaveValues({ { NonLocalizable::StageLayoutID, json::value(m_settings.stageLayout) }, { NonLocalizable::ArrangeModeID, json::value(m_settings.arrangeMode) } }, file);
+                }
+            }
+
             Logger::warn(L"Failed to read from settings file");
             return;
         }
@@ -212,23 +229,23 @@ void FancyZonesSettings::LoadSettings()
             m_settings.dockEdgeSnapBand = std::clamp(*val, 1, 100);
         }
 
-        if (auto val = values.get_int_value(NonLocalizable::ArrangeModeID))
-        {
-            const int mode = std::clamp(*val, 0, 1);
-            if (m_settings.arrangeMode != mode)
-            {
-                m_settings.arrangeMode = mode;
-                NotifyObservers(SettingId::ArrangeMode);
-            }
-        }
-
+        // The file is there: a key it lacks is an install from before Stage was the default (an unknown layout name is ignored)
+        const auto fallback = ArrangeFallback::For(true);
+        std::wstring layout = m_settings.stageLayout;
         if (auto val = values.get_string_value(NonLocalizable::StageLayoutID))
         {
             if (*val == L"stage" || *val == L"pair" || *val == L"master")
             {
-                m_settings.stageLayout = *val;
+                layout = *val;
             }
         }
+        else
+        {
+            layout = fallback.stageLayout;
+        }
+
+        const auto mode = values.get_int_value(NonLocalizable::ArrangeModeID);
+        SetArrange(mode ? std::clamp(*mode, 0, 1) : fallback.arrangeMode, layout);
 
         // Read from the parsed file, not through get_int_value: its int cast is undefined for a huge number
         const auto stageNumber = [&](const wchar_t* id) -> std::optional<int> {
@@ -449,6 +466,12 @@ void FancyZonesSettings::LoadSettings()
     {
         // Failure to load settings does not break FancyZones functionality. Display error message and continue with default settings.
         Logger::error(L"Failed to read settings. {}", e.message());
+        if (first)
+        {
+            const auto fallback = ArrangeFallback::For(true); // The file is there, as on an unreadable one
+            SetArrange(fallback.arrangeMode, fallback.stageLayout);
+        }
+
         MessageBox(NULL,
                    GET_RESOURCE_STRING(IDS_FANCYZONES_SETTINGS_LOAD_ERROR).c_str(),
                    GET_RESOURCE_STRING(IDS_POWERTOYS_FANCYZONES).c_str(),
@@ -471,19 +494,40 @@ bool FancyZonesSettings::SaveValue(const wchar_t* id, const json::JsonValue& val
 
 bool FancyZonesSettings::SaveValue(json::JsonObject settings, const wchar_t* id, const json::JsonValue& value, const std::wstring& file)
 {
+    return Write(settings, { { id, value } }, file);
+}
+
+bool FancyZonesSettings::SaveValues(const std::vector<std::pair<const wchar_t*, json::JsonValue>>& values, const std::wstring& file)
+{
+    auto read = json::from_file(file);
+    if (!read && GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES)
+    {
+        Logger::error(L"{} can't be read, {} settings aren't saved", file, values.size());
+        return false;
+    }
+
+    return Write(read.value_or(json::JsonObject{}), values, file);
+}
+
+bool FancyZonesSettings::Write(json::JsonObject settings, const std::vector<std::pair<const wchar_t*, json::JsonValue>>& values, const std::wstring& file)
+{
     if (!settings.HasKey(L"properties"))
     {
         settings.SetNamedValue(L"properties", json::JsonObject{});
     }
     else if (!json::has(settings, L"properties", json::JsonValueType::Object))
     {
-        Logger::error(L"{} has no list of properties, {} isn't saved", file, id);
+        Logger::error(L"{} has no list of properties, {} isn't saved", file, values.empty() ? L"" : values.front().first);
         return false;
     }
 
-    json::JsonObject property;
-    property.SetNamedValue(L"value", value);
-    settings.GetNamedObject(L"properties").SetNamedValue(id, property);
+    for (const auto& [id, value] : values)
+    {
+        json::JsonObject property;
+        property.SetNamedValue(L"value", value);
+        settings.GetNamedObject(L"properties").SetNamedValue(id, property);
+    }
+
     settings.SetNamedValue(L"name", json::value(NonLocalizable::ModuleKey));
     settings.SetNamedValue(L"version", json::value(L"1.0"));
 
@@ -591,6 +635,17 @@ bool FancyZonesSettings::SaveStageMonitor(const std::wstring& key, const StageMo
 
     monitors.SetNamedValue(key, StageMonitorJson(entry));
     return SaveValue(settings, NonLocalizable::StageMonitorsID, json::value(monitors), file); // The object that was read, not a second read
+}
+
+// The layout first: the arrange mode observers see the mode and the layout of the same file
+void FancyZonesSettings::SetArrange(int mode, const std::wstring& layout)
+{
+    m_settings.stageLayout = layout;
+    if (m_settings.arrangeMode != mode)
+    {
+        m_settings.arrangeMode = mode;
+        NotifyObservers(SettingId::ArrangeMode);
+    }
 }
 
 void FancyZonesSettings::NotifyObservers(SettingId id) const

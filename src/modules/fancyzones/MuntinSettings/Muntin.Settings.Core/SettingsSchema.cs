@@ -1,7 +1,8 @@
 // Mirrors the Muntin native code: key names from FancyZonesLib\SettingsConstants.h (NonLocalizable IDs),
 // defaults from FancyZonesLib\Settings.h, clamps from FancyZonesSettings::LoadSettings (Settings.cpp),
-// labels and choice tables from FancyZonesLib\Tray.cpp (Toggles[], *Choices[], Spacings[]).
-// When one of those changes, change this file too.
+// the arrange modes and the Animations label from FancyZonesLib\Tray.cpp (Modes[], AnimationsLabel).
+// The other settings left the tray for this app: their labels and choice tables live here only.
+// When one of those changes, change this file too (NativeParityTests checks them).
 namespace Muntin.Settings;
 
 public enum SettingKind
@@ -13,7 +14,8 @@ public enum SettingKind
 
 public sealed record Choice(int Value, string Label);
 
-public sealed record StringChoice(string Value, string Label);
+/// <summary>One of the arrange modes (Tray.cpp Modes[]): Dock, or Stage with one of its layouts. StageLayout null: Dock, which leaves the layout as it is.</summary>
+public sealed record ModeDef(string Label, int ArrangeMode, string? StageLayout);
 
 public sealed record SettingDef(string Key, SettingKind Kind, object Default, string Label, int Min = 0, int Max = 0)
 {
@@ -30,7 +32,7 @@ public static class SettingsSchema
     // Settings.h stageMonitors: written by Muntin itself (strip/cut drags); the app never touches it
     public const string StageMonitorsKey = "fancyzones_stageMonitors";
 
-    // Tray.cpp Toggles[] (same order, same labels)
+    // On/off settings (the order the tray once listed them in; only Animations is still in the tray)
     public static readonly SettingDef ShiftDrag = new("fancyzones_shiftDrag", SettingKind.Bool, true, "Dock only while Shift is held");
     public static readonly SettingDef DockEdgeSnap = new("fancyzones_dockEdgeSnap", SettingKind.Bool, true, "Dock at the left and right screen edges");
     public static readonly SettingDef DockAutoTile = new("fancyzones_dockAutoTile", SettingKind.Bool, false, "Dock new windows by themselves");
@@ -50,22 +52,20 @@ public static class SettingsSchema
 
     // Choices (Settings.cpp clamps each to its table's range)
     public static readonly SettingDef DockMotionCurve = new("fancyzones_dockMotionCurve", SettingKind.Int, 0, "Motion curve", 0, 1);
-    public static readonly SettingDef StagePromoteStyle = new("fancyzones_stagePromoteStyle", SettingKind.Int, 0, "Promote animation", 0, 1);
+    public static readonly SettingDef StagePromoteStyle = new("fancyzones_stagePromoteStyle", SettingKind.Int, 1, "Promote animation", 0, 1);
     public static readonly SettingDef StageMoveStyle = new("fancyzones_stageMoveStyle", SettingKind.Int, 0, "Move animation", 0, 1);
     public static readonly SettingDef StageStripRadius = new("fancyzones_stageStripRadius", SettingKind.Int, 12, "Strip corner radius", 0, 40);
-    public static readonly SettingDef ArrangeMode = new("fancyzones_arrangeMode", SettingKind.Int, 0, "Arrange", 0, 1);
-    public static readonly SettingDef StageLayout = new("fancyzones_stageLayout", SettingKind.String, "master", "Stage layout");
+    public static readonly SettingDef ArrangeMode = new("fancyzones_arrangeMode", SettingKind.Int, 1, "Arrange", 0, 1);
+    public static readonly SettingDef StageLayout = new("fancyzones_stageLayout", SettingKind.String, "stage", "Stage layout");
     public static readonly SettingDef DesktopScrollPages = new("fancyzones_desktopScrollPages", SettingKind.Int, 2, "Desktop pages per monitor", 1, MaxDesktopScrollPages);
 
     public static readonly Choice[] MotionChoices = [new(0, "Spring"), new(1, "Ease")];
     public static readonly Choice[] PromoteChoices = [new(0, "Grow from the tile"), new(1, "Crossfade")];
     public static readonly Choice[] MoveChoices = [new(0, "Slide"), new(1, "Crossfade")];
     public static readonly Choice[] RadiusChoices = [new(0, "Square"), new(6, "Small"), new(12, "Medium"), new(20, "Large"), new(30, "Round")];
-    public static readonly Choice[] ArrangeChoices = [new(0, "Dock (drag to dock windows)"), new(1, "Stage (one main window, the rest in a strip)")];
-    public static readonly StringChoice[] StageLayoutChoices = [new("master", "Master and stack"), new("stage", "Stage with strip"), new("pair", "Pair with strip")];
     public static readonly Choice[] PageChoices = [new(1, "1 (no scrolling)"), new(2, "2"), new(3, "3"), new(MaxDesktopScrollPages, "4")];
 
-    // Tray.cpp Spacings[]: Max is the slider reach; settings.json allows more (Settings.cpp clamps gap 0..100, margins 0..500)
+    // SliderMax is the slider reach; settings.json allows more (Settings.cpp clamps gap 0..100, margins 0..500)
     public sealed record SpacingDef(SettingDef Setting, int SliderMax);
 
     public static readonly SettingDef DockGap = new("fancyzones_dockGap", SettingKind.Int, 8, "Gap", 0, 100);
@@ -94,6 +94,36 @@ public static class SettingsSchema
         DockEdgeSnapBand, DockEdgeBand, DockWindowEdgePercent, StagePairCut, StageMasterCut,
     ];
 
-    // Settings.cpp: a layout name nobody knows is ignored (Muntin keeps master)
+    // Settings.cpp: a layout name nobody knows is ignored (Muntin keeps the one it had)
     public static bool IsKnownStageLayout(string? value) => value is "master" or "stage" or "pair";
+
+    // The arrange modes, one choice (Tray.cpp Modes[], same order and labels): fancyzones_arrangeMode and fancyzones_stageLayout together
+    public static readonly ModeDef[] Modes =
+    [
+        new("Dock (drag to dock)", 0, null),
+        new("Master and stack", 1, "master"),
+        new("Stage with strip", 1, "stage"),
+        new("Pair with strip", 1, "pair"),
+    ];
+
+    /// <summary>
+    /// The index into Modes of what the two keys say; -1 for Stage with a layout name Muntin does not know (it ignores the name and
+    /// keeps the layout it had, which the file can't tell).
+    /// </summary>
+    public static int CurrentMode(int arrangeMode, string? stageLayout)
+    {
+        if (arrangeMode != 1)
+        {
+            return 0;
+        }
+
+        return Array.FindIndex(Modes, m => m.StageLayout is not null && m.StageLayout == stageLayout);
+    }
+
+    /// <summary>
+    /// Settings.h ArrangeFallback: the mode and layout when settings.json doesn't give them. No file: a fresh install, Stage with
+    /// the stage layout (the defaults above). A file without them, or one that can't be read: an install from before, Dock and master.
+    /// </summary>
+    public static (int ArrangeMode, string StageLayout) ArrangeFallback(bool fileExists) =>
+        fileExists ? (0, "master") : ((int)ArrangeMode.Default, (string)StageLayout.Default);
 }

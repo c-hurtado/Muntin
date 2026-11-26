@@ -18,6 +18,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- The icon of Muntin.exe (FancyZonesLib\fancyzones.base.rc IDI_ICON1) -->
+    <ApplicationIcon>..\..\FancyZonesLib\icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
@@ -27,6 +29,10 @@
     <PackageReference Include="Microsoft.Windows.AI.MachineLearning" Version="2.1.70" ExcludeAssets="all" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7705" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.251219" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The same icon for the window (AppWindow.SetIcon takes a file) -->
+    <Content Include="..\..\FancyZonesLib\icon.ico" Link="Muntin.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Muntin.Settings.Core\Muntin.Settings.Core.csproj" />

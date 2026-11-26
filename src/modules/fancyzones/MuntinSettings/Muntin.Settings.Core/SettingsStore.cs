@@ -115,6 +115,32 @@ public sealed class SettingsStore
         return new((int)def.Default, raw, raw is not null);
     }
 
+    /// <summary>
+    /// The arrange mode as Muntin sees the file: an index into SettingsSchema.Modes (-1: Stage with a layout name Muntin ignores),
+    /// and a note when the file holds something odd. A key that is missing takes SettingsSchema.ArrangeFallback.
+    /// </summary>
+    public static (int Index, string? Note) ReadMode(JsonObject? properties, bool fileExists)
+    {
+        var fallback = SettingsSchema.ArrangeFallback(fileExists);
+        var modeRead = ReadInt(properties, SettingsSchema.ArrangeMode);
+        var mode = modeRead.Present ? modeRead.Value : fallback.ArrangeMode;
+        string? note = modeRead.Odd ? $"settings.json has {modeRead.Raw?.ToJsonString()} for the mode; Muntin uses {modeRead.Value}." : null;
+        if (mode != 1)
+        {
+            return (0, note);
+        }
+
+        var layoutRead = ReadString(properties, SettingsSchema.StageLayout);
+        var layout = layoutRead.Present ? layoutRead.Value : fallback.StageLayout;
+        var index = SettingsSchema.CurrentMode(mode, layout);
+        if (index < 0)
+        {
+            note = $"settings.json has {layoutRead.Raw?.ToJsonString()} for the Stage layout; Muntin ignores it and keeps the layout it had.";
+        }
+
+        return (index, note);
+    }
+
     public static ReadValue<string> ReadString(JsonObject? properties, SettingDef def)
     {
         var raw = RawValue(properties, def.Key);
@@ -136,7 +162,26 @@ public sealed class SettingsStore
     /// Replaces one property and keeps everything else. False when the file exists but can't be parsed (it is never
     /// overwritten then: the other settings would be lost) or can't be written.
     /// </summary>
-    public bool SaveValue(string key, JsonNode? value)
+    public bool SaveValue(string key, JsonNode? value) => SaveValues([new(key, value)]);
+
+    /// <summary>
+    /// Writes the arrange mode: the layout (when the mode has one) and fancyzones_arrangeMode in one write, so Muntin's reload
+    /// never sees the new mode with the old layout. Dock writes only the mode and leaves the layout as it is.
+    /// </summary>
+    public bool SaveMode(ModeDef mode)
+    {
+        var values = new List<KeyValuePair<string, JsonNode?>>();
+        if (mode.StageLayout is not null)
+        {
+            values.Add(new(SettingsSchema.StageLayout.Key, JsonValue.Create(mode.StageLayout)));
+        }
+
+        values.Add(new(SettingsSchema.ArrangeMode.Key, JsonValue.Create(SettingsSchema.ArrangeMode.Clamp(mode.ArrangeMode))));
+        return SaveValues(values);
+    }
+
+    /// <summary>Replaces several properties in one read and one write, keeping everything else. False as SaveValue.</summary>
+    public bool SaveValues(IReadOnlyList<KeyValuePair<string, JsonNode?>> values)
     {
         JsonObject root;
         try
@@ -170,7 +215,11 @@ public sealed class SettingsStore
         }
 
         var properties = (JsonObject)root["properties"]!;
-        properties[key] = new JsonObject { ["value"] = value?.DeepClone() };
+        foreach (var (key, value) in values)
+        {
+            properties[key] = new JsonObject { ["value"] = value?.DeepClone() };
+        }
+
         root["name"] = SettingsSchema.ModuleName;
         root["version"] = SettingsSchema.FileVersion;
 

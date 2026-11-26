@@ -492,6 +492,33 @@ namespace StageStripMotionUnitTests
             }
         }
 
+        TEST_METHOD(TileShapeRoundsTheThumbnailAndTheHoverRing)
+        {
+            const LRect thumb(10, 20, 110, 80);
+            const auto rest = ShapeOf(thumb, 12, false, 4);
+            Assert::IsFalse(rest.ring, L"not hovered: no ring");
+            Assert::IsTrue(rest.outer.Same(thumb));
+            Assert::AreEqual(12, rest.thumbRadius);
+            Assert::AreEqual(12, rest.outerRadius);
+
+            const auto hover = ShapeOf(thumb, 12, true, 4);
+            Assert::IsTrue(hover.ring);
+            Assert::IsTrue(hover.thumb.Same(thumb), L"the thumbnail does not move");
+            Assert::IsTrue(hover.outer.Same(LRect(6, 16, 114, 84)), L"the ring is the pad wide");
+            Assert::AreEqual(12, hover.thumbRadius, L"the thumbnail keeps its rounded corners");
+            Assert::AreEqual(16, hover.outerRadius, L"the ring is rounded concentric with the thumbnail");
+
+            const auto square = ShapeOf(thumb, 0, true, 4);
+            Assert::AreEqual(0, square.thumbRadius);
+            Assert::AreEqual(0, square.outerRadius, L"radius 0: square ring around a square thumbnail");
+
+            const auto tiny = ShapeOf(LRect(0, 0, 10, 6), 12, true, 4);
+            Assert::AreEqual(3, tiny.thumbRadius, L"clamped to half the short side");
+            Assert::AreEqual(7, tiny.outerRadius, L"thumb radius + pad, within half of the outer short side");
+
+            Assert::IsFalse(ShapeOf(thumb, 12, true, 0).ring, L"no pad: no ring");
+        }
+
         TEST_METHOD(HitTestFollowsTheProjectedTiles)
         {
             const auto shown = ProjectSlide(Full(6, 3), 2);

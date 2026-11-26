@@ -607,6 +607,9 @@ namespace FancyZonesUnitTests
             Assert::IsTrue(Stage::IsHeld(window));
             Assert::IsFalse(Stage::IsHeld(nullptr));
 
+            Settings dock;
+            dock.arrangeMode = 0;
+            FancyZonesSettings::instance().SetSettings(dock);
             Assert::IsFalse(Arrange::HandsOff(window), L"dock mode: a held window is not hands-off");
             Settings stage;
             stage.arrangeMode = 1;
@@ -682,7 +685,7 @@ namespace FancyZonesUnitTests
             Assert::AreEqual(std::string("master"), StageConfig::MakeLayout(values)->Name(), L"unknown: master, nobody gets the strip unasked");
             Assert::AreEqual(std::string("master"), StageConfig::EffectiveLayoutName(L""));
             Assert::AreEqual(std::wstring(L"master"), StageConfig::Values{}.layout, L"the default");
-            Assert::AreEqual(std::wstring(L"master"), Settings{}.stageLayout, L"the default of the settings file");
+            Assert::AreEqual(std::wstring(L"stage"), Settings{}.stageLayout, L"the default of the settings file: a fresh install gets the strip");
         }
 
         TEST_METHOD (MonitorKeyUsesDeviceAndInstanceElseOrigin)

@@ -55,7 +55,7 @@ Shift+Win+arrows move the window:
 
 They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
 
-A middle click on a title bar expands the window into the open space instead of maximizing it. A docked window takes the empty spaces beside it, including ones kept for a closed app, and the other windows keep their size. A floating window docks into the largest empty space on its monitor (an open one before one kept for an app). When nothing is docked there, it fills the work area (not maximized). But when no docked window shows on the monitor and another floating window is on it, the clicked window docks on the half it sits on and the other one takes the other half, and the clicked window comes to the front. Minimized docked windows and slots kept for apps don't count, and they leave the layout: a minimized one floats when it comes back, and a closed app no longer has a slot kept. With several floating windows, the one nearest the top of the z-order goes; always-on-top windows and the clicked window's own dialogs don't count. When there is no space to expand into, or the window can't be docked, nothing happens. Middle clicks on tabs still reach the app and don't expand. The click is not taken from the app, so an app that acts on a middle click in its empty tab strip does both (Firefox opens a new tab). It works whatever `fancyzones_overrideSnapHotkeys` is. Turn it off with `fancyzones_dockMiddleClickExpand` or the tray menu.
+A middle click on a title bar expands the window into the open space instead of maximizing it. A docked window takes the empty spaces beside it, including ones kept for a closed app, and the other windows keep their size. A floating window docks into the largest empty space on its monitor (an open one before one kept for an app). When nothing is docked there, it fills the work area (not maximized). But when no docked window shows on the monitor and another floating window is on it, the clicked window docks on the half it sits on and the other one takes the other half, and the clicked window comes to the front. Minimized docked windows and slots kept for apps don't count, and they leave the layout: a minimized one floats when it comes back, and a closed app no longer has a slot kept. With several floating windows, the one nearest the top of the z-order goes; always-on-top windows and the clicked window's own dialogs don't count. When there is no space to expand into, or the window can't be docked, nothing happens. Middle clicks on tabs still reach the app and don't expand. The click is not taken from the app, so an app that acts on a middle click in its empty tab strip does both (Firefox opens a new tab). It works whatever `fancyzones_overrideSnapHotkeys` is. Turn it off with `fancyzones_dockMiddleClickExpand` or in the settings window (Dock).
 
 Three more shortcuts act on a docked window, and on any other window the keys keep their Windows meaning:
 
@@ -132,19 +132,19 @@ To forget all layouts and saved digits, quit Muntin, delete `%LOCALAPPDATA%\Munt
 
 ### Stage mode
 
-Stage mode is a second way to arrange windows, ported from StageProto: Muntin takes the ordinary windows of each monitor and keeps them in a list, one monitor at a time. The first window is the main one, and the others sit beside it. Dock-by-drag stays the default. **Stage mode has not been tried live yet: read "Stage mode status and known limitations" before you turn it on.** The checklist for the first live run is in [doc/muntin/STAGE-LIVE-TEST.md](doc/muntin/STAGE-LIVE-TEST.md).
+Stage mode is a second way to arrange windows, ported from StageProto: Muntin takes the ordinary windows of each monitor and keeps them in a list, one monitor at a time. The first window is the main one, and the others sit beside it. A fresh install starts in Stage mode with the Stage layout (an existing `settings.json` keeps its mode). **Stage mode has not been tried live yet: read "Stage mode status and known limitations" before you turn it on.** The checklist for the first live run is in [doc/muntin/STAGE-LIVE-TEST.md](doc/muntin/STAGE-LIVE-TEST.md).
 
-**Switch:** right-click the tray icon and choose **Arrange: Dock / Stage** (checked means Stage), or set `fancyzones_arrangeMode` in `settings.json` to `1` (Stage) or `0` (Dock). The change applies at once: switching to Stage starts after about 0.7 seconds, and switching back puts every window back where it was before Stage took it (size, position, minimized or maximized).
+**Switch:** right-click the tray icon and pick one of the four modes at the top of the menu: **Dock (drag to dock)**, **Master and stack**, **Stage with strip** or **Pair with strip** (the same choice is under Arrange in the settings window). The last three are Stage mode with that layout. Or set `fancyzones_arrangeMode` in `settings.json` to `1` (Stage) or `0` (Dock). The change applies at once: switching to Stage starts after about 0.7 seconds, and switching back puts every window back where it was before Stage took it (size, position, minimized or maximized).
 
 **Layouts:** three layouts, the same on every monitor. Set one with `fancyzones_stageLayout`, or press **Win+Shift+L** to go to the next one (Stage, then Pair, then Master, then Stage again). The choice is saved.
 
 | Layout | What you get |
 |---|---|
-| Master (the default) | The main window on the left, the other windows stacked on its right with equal heights. Up to 9 windows per monitor (the main one and 8 in the stack). Windows beyond that are not taken by Stage and stay where they are, until room appears. |
-| Stage | The main window large, a strip of live thumbnails of the other windows on the right |
+| Master | The main window on the left, the other windows stacked on its right with equal heights. Up to 9 windows per monitor (the main one and 8 in the stack). Windows beyond that are not taken by Stage and stay where they are, until room appears. |
+| Stage (the default) | The main window large, a strip of live thumbnails of the other windows on the right |
 | Pair | Two windows side by side, and a strip of thumbnails on the right from the third window on |
 
-In Stage and Pair the strip shows as many tiles as fit; the rest are reached with the wheel or the keys. The strip is an overlay of its own. It hides while a window is maximized or a window of another app covers the monitor, such as a fullscreen game or video.
+In Stage and Pair the strip shows as many tiles as fit; the rest are reached with the wheel or the keys. The strip is an overlay of its own, with no background: the thumbnails float over whatever is behind them. Clicks between the tiles do nothing, and the wheel scrolls the strip there too. It hides while a window is maximized or a window of another app covers the monitor, such as a fullscreen game or video.
 
 **Keys** (they work on the window Stage manages that has the focus; while the focus is on the taskbar, Start or an overlay they act on the last managed window; on any other window they keep their Windows meaning). They don't need `fancyzones_overrideSnapHotkeys`. Muntin also keeps the Start menu from opening when you press Win for these.
 
@@ -183,7 +183,7 @@ Don't delete `stage-state.txt` by hand while windows are still arranged, because
 
 ## Configure it
 
-The tray menu (right-click the Muntin icon) turns the most used settings on and off. All settings are in one file:
+The tray menu (right-click the Muntin icon) has the four arrange modes, Animations, and **Settings...**, which opens the settings window (`Muntin.Settings.exe`) with the other settings. All settings are in one file:
 
 `%LOCALAPPDATA%\Muntin\settings.json`
 
@@ -207,7 +207,7 @@ These settings exist only in the fork.
 | Setting | Meaning | Default | Allowed |
 |---|---|---|---|
 | `fancyzones_dockGap` | Pixels left between docked windows. A change is applied to the docked windows at once. | 8 | 0 to 100 |
-| `fancyzones_dockMarginLeft`, `fancyzones_dockMarginTop`, `fancyzones_dockMarginRight`, `fancyzones_dockMarginBottom` | Pixels kept free between docked windows and that edge of the screen's work area. The tray menu's "Gap and margins..." has sliders (margins 0 to 15, gap 0 to 30) that apply as you drag; the file allows more. A change is applied at once. Margins that leave no room are ignored. | 0 | 0 to 500 |
+| `fancyzones_dockMarginLeft`, `fancyzones_dockMarginTop`, `fancyzones_dockMarginRight`, `fancyzones_dockMarginBottom` | Pixels kept free between docked windows and that edge of the screen's work area. The settings window's Spacing page has sliders (margins 0 to 15, gap 0 to 30) that apply as you let go; the file allows more. A change is applied at once. Margins that leave no room are ignored. | 0 | 0 to 500 |
 | `fancyzones_dockEdgeBand` | How close to a screen edge, in pixels, the cursor must be for the window to take half of the screen | 48 | 8 to 500 |
 | `fancyzones_dockWindowEdgePercent` | How far into a docked window, in percent from each of its edges, the cursor splits that window. The rest of the window is the middle, where nothing happens. | 30 | 5 to 50 |
 
@@ -224,8 +224,8 @@ A value outside the allowed range is brought back to the nearest allowed value.
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
 | `fancyzones_dockAutoTile` | New windows dock by themselves (see "Dock new windows by themselves") | `false` |
 | `fancyzones_dockAnimation` | Windows moved with Shift+Win+arrows or the < > buttons spring to their new places | `true` |
-| `fancyzones_dockMotionCurve` | How moved windows travel (Shift+Win+arrows, the < > buttons, and going to a desktop page): `0` spring, which overshoots slightly and keeps the speed of a move in flight, or `1` ease, one 0.3 second curve without overshoot, which a new target restarts from where the window is. Also in the tray menu, under "Motion curve". | 0 |
-| `fancyzones_dockAnticipation` | Windows pull back slightly before they move. Moves to a desktop page pull back only with the ease curve. Nothing moves without `fancyzones_dockAnimation`, so the tray item is grayed out then. | `false` |
+| `fancyzones_dockMotionCurve` | How moved windows travel (Shift+Win+arrows, the < > buttons, and going to a desktop page): `0` spring, which overshoots slightly and keeps the speed of a move in flight, or `1` ease, one 0.3 second curve without overshoot, which a new target restarts from where the window is. Also in the settings window, under Animations. | 0 |
+| `fancyzones_dockAnticipation` | Windows pull back slightly before they move. Moves to a desktop page pull back only with the ease curve. Nothing moves without `fancyzones_dockAnimation`, so the settings window grays it out then. | `false` |
 | `fancyzones_dockMiddleClickExpand` | A middle click on a title bar expands its window into the open space | `true` |
 | `fancyzones_desktopScrollOverview` | Scrolling the desktop zooms out to the pages (see "Scroll the desktop") | `false` |
 | `fancyzones_desktopScrollPages` | How many pages each monitor scrolls through, the first included, empty pages too: 1 to 4. 1 turns scrolling off, and Shift+Win+Down doesn't take a window past the last page. | 2 |
@@ -251,8 +251,9 @@ These settings exist only in the fork. See "Stage mode" above.
 
 | Setting | Meaning | Default | Allowed |
 |---|---|---|---|
-| `fancyzones_arrangeMode` | `0`: Dock (dock-by-drag), `1`: Stage. Also the tray item "Arrange: Dock / Stage". | 0 | 0 or 1 |
-| `fancyzones_stageLayout` | The layout of every monitor. Win+Shift+L changes it. | `"master"` | `"stage"`, `"pair"`, `"master"` (anything else is ignored) |
+| `fancyzones_arrangeMode` | `0`: Dock (dock-by-drag), `1`: Stage. The tray's four modes write it together with `fancyzones_stageLayout` (Dock writes only this one). | 1 | 0 or 1 |
+| `fancyzones_stageLayout` | The layout of every monitor. Win+Shift+L changes it. | `"stage"` | `"stage"`, `"pair"`, `"master"` (anything else is ignored) |
+| `fancyzones_stagePromoteStyle` | How a window promoted out of the strip animates (with `fancyzones_stageAnimatePromote` and `fancyzones_dockAnimation` on): `0` grows from the tile, `1` crossfades | 1 | 0 or 1 |
 | `fancyzones_stagePairCut` | Where the vertical edge of the Pair layout sits, in thousandths of the usable width | 500 | 150 to 850 |
 | `fancyzones_stageMasterCut` | The same for the Master layout (the main window's share) | 600 | 150 to 850 |
 | `fancyzones_stageRows` | Master layout: the heights of the stack windows as shares in thousandths, comma separated (for example `"500,300,200"`). Empty means equal heights. | `""` | |

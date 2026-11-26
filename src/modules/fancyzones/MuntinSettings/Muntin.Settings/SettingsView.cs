@@ -10,7 +10,8 @@ namespace Muntin.Settings.App;
 
 /// <summary>
 /// Builds the sections from SettingsSchema and keeps them in step with settings.json. Every change writes one key at once
-/// (Muntin hot-reloads the file); loading never writes, so odd values in the file stay until the user changes them.
+/// (the arrange mode: its two keys in one write; Muntin hot-reloads the file); loading never writes, so odd values in the file
+/// stay until the user changes them.
 /// </summary>
 internal sealed class SettingsView
 {
@@ -20,6 +21,7 @@ internal sealed class SettingsView
     private readonly Dictionary<string, FrameworkElement> _sections = [];
     private readonly List<Action> _refreshers = [];
     private JsonObject? _properties;
+    private bool _fileExists = true;
     private bool _updating;
     private bool _editable = true;
 
@@ -34,9 +36,11 @@ internal sealed class SettingsView
 
     public void SetEditable(bool editable) => _editable = editable;
 
-    public void Refresh(JsonObject? properties)
+    // fileExists: settings.json is there (readable or not); a missing arrange key means something else without it
+    public void Refresh(JsonObject? properties, bool fileExists)
     {
         _properties = properties?.DeepClone().AsObject();
+        _fileExists = fileExists;
         RefreshControls();
     }
 
@@ -106,6 +110,32 @@ internal sealed class SettingsView
         _dispatcher.TryEnqueue(RefreshControls);
     }
 
+    // The arrange mode: both keys in one write, then the local copy, as Save does
+    private void SaveMode(ModeDef mode)
+    {
+        if (_updating || !_editable)
+        {
+            return;
+        }
+
+        if (!_store.SaveMode(mode))
+        {
+            SaveFailed?.Invoke($"{mode.Label} wasn't saved: settings.json can't be read or written.");
+            _dispatcher.TryEnqueue(RefreshControls);
+            return;
+        }
+
+        _properties ??= [];
+        if (mode.StageLayout is not null)
+        {
+            _properties[S.StageLayout.Key] = new JsonObject { ["value"] = mode.StageLayout };
+        }
+
+        _properties[S.ArrangeMode.Key] = new JsonObject { ["value"] = JsonValue.Create(mode.ArrangeMode) };
+        _fileExists = true;
+        _dispatcher.TryEnqueue(RefreshControls);
+    }
+
     private static string OddNote(JsonNode? raw, object used) =>
         $"settings.json has {raw?.ToJsonString() ?? "nothing"} here; Muntin uses {used}. It stays until you change this.";
 
@@ -132,7 +162,7 @@ internal sealed class SettingsView
 
     private SettingsCard Combo(SettingDef def, Choice[] choices, string? description = null, Func<bool>? enabled = null, string? disabledNote = null)
     {
-        var combo = new ComboBox { MinWidth = 220 };
+        var combo = new ComboBox { MinWidth = 200 };
         foreach (var choice in choices)
         {
             combo.Items.Add(choice.Label);
@@ -253,37 +283,40 @@ internal sealed class SettingsView
 
     // ---- Sections
 
+    // One choice for the mode and the Stage layout, as in the tray: Dock, or Stage with one of its three layouts
     private FrameworkElement BuildArrange()
     {
-        var mode = Combo(S.ArrangeMode, S.ArrangeChoices, "How windows are arranged.");
-
-        var layout = new ComboBox { MinWidth = 220 };
-        foreach (var choice in S.StageLayoutChoices)
+        var modes = new RadioButtons { MaxColumns = 1 };
+        foreach (var mode in S.Modes)
         {
-            layout.Items.Add(choice.Label);
+            modes.Items.Add(mode.Label);
         }
 
-        var layoutCard = new SettingsCard { Header = S.StageLayout.Label, Content = layout };
-        layout.SelectionChanged += (_, _) =>
+        var card = new SettingsCard
         {
-            if (layout.SelectedIndex >= 0)
+            Header = "Arrange",
+            Content = modes,
+            ContentAlignment = ContentAlignment.Vertical,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+        };
+
+        // RadioButtons can report a selection after the refresh is over (when it loads): only a different mode is written
+        modes.SelectionChanged += (_, _) =>
+        {
+            var index = modes.SelectedIndex;
+            if (index >= 0 && index != SettingsStore.ReadMode(_properties, _fileExists).Index)
             {
-                Save(S.StageLayout, JsonValue.Create(S.StageLayoutChoices[layout.SelectedIndex].Value));
+                SaveMode(S.Modes[index]);
             }
         };
         _refreshers.Add(() =>
         {
-            var read = SettingsStore.ReadString(_properties, S.StageLayout);
-            var known = S.IsKnownStageLayout(read.Value);
-            var stage = SettingsStore.ReadInt(_properties, S.ArrangeMode).Value == 1;
-            layout.SelectedIndex = known ? Array.FindIndex(S.StageLayoutChoices, c => c.Value == read.Value) : 0; // Unknown names are master, as in StageConfig
-            layoutCard.IsEnabled = stage;
-            layoutCard.Description = Join(
-                stage ? "The arrangement Stage mode uses." : "Used in Stage mode.",
-                !known || read.Odd ? OddNote(read.Raw, "master") : null);
+            var (index, note) = SettingsStore.ReadMode(_properties, _fileExists);
+            modes.SelectedIndex = index; // -1: none, the layout Muntin keeps isn't in the file
+            card.Description = Join("How windows are arranged. Win+Shift+L cycles the Stage layouts.", note);
         });
 
-        return Page("Arrange", mode, layoutCard);
+        return Page("Arrange", card);
     }
 
     private FrameworkElement BuildStage()

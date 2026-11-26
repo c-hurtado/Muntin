@@ -122,7 +122,7 @@ struct Settings
     int dockMotionCurve = 0; // How windows move: 0 spring, 1 ease (one 1-cos curve, no overshoot)
     bool dockAnticipation = false; // A small pull back before the move
     bool stageAnimatePromote = false; // Promoting a window out of the Stage strip glides (needs Animations)
-    int stagePromoteStyle = 0; // How: 0 grow from the strip tile, 1 crossfade
+    int stagePromoteStyle = 1; // How: 0 grow from the strip tile, 1 crossfade (default)
     int stageMoveStyle = 0; // How a window moves between docked slots: 0 slide, 1 crossfade
     int stageStripRadius = 12; // Corner radius of the Stage strip tiles in pixels, 0 .. 40
     bool dockMiddleClickExpand = true; // A middle click on a title bar expands its window into the empty space
@@ -130,8 +130,8 @@ struct Settings
     int desktopScrollPages = 2; // Pages each monitor scrolls through, the first included, at most MaxDesktopScrollPages. 1: no scrolling.
     bool dockEdgeSnap = true; // A window dragged to the left or right edge docks there without Shift, like Windows snap
     int dockEdgeSnapBand = 12; // Pixels from that edge within which it docks
-    int arrangeMode = 0; // 0: dock-by-drag (default), 1: stage (see Arrange.h)
-    std::wstring stageLayout = L"master"; // stage, pair or master
+    int arrangeMode = 1; // 0: dock-by-drag, 1: stage (see Arrange.h). The default of a fresh install only: see ArrangeFallback.
+    std::wstring stageLayout = L"stage"; // stage, pair or master. The same.
     int stagePairCut = 500; // Where the pair layout's vertical edge sits, in thousandths of its span
     int stageMasterCut = 600; // The same for the master layout
     std::wstring stageRows = L""; // Master layout: height shares of the stack, in thousandths, comma separated. Empty: equal heights.
@@ -162,6 +162,20 @@ struct Settings
     std::vector<std::wstring> excludedAppsArray;
 };
 
+// The arrange mode and Stage layout when settings.json does not give them. A fresh install (no settings.json) starts in Stage with
+// the stage layout, the defaults in Settings. A settings.json that is there without them, or that can't be read, is an install
+// from before Stage was the default: Dock, and the master layout.
+struct ArrangeFallback
+{
+    int arrangeMode;
+    const wchar_t* stageLayout;
+
+    static constexpr ArrangeFallback For(bool fileExists) noexcept
+    {
+        return fileExists ? ArrangeFallback{ 0, L"master" } : ArrangeFallback{ 1, L"stage" };
+    }
+};
+
 class FancyZonesSettings
 {
 public:
@@ -186,6 +200,12 @@ public:
     {
         m_settings = settings;
     }
+
+    // The next LoadSettings is the first of the process again (fresh install or not is decided there)
+    inline void ForgetLoaded() noexcept
+    {
+        m_loaded = false;
+    }
 #endif
 
     void AddObserver(SettingsObserver& observer);
@@ -197,6 +217,8 @@ public:
     // False when the file is there but can't be read: it is left as it is.
     static bool SaveValue(const wchar_t* id, const json::JsonValue& value, const std::wstring& file = GetSettingsFileName());
     static bool SaveValue(json::JsonObject settings, const wchar_t* id, const json::JsonValue& value, const std::wstring& file); // settings: what was read from file
+    // Several settings in one read and one write, so the file watcher never sees some of them changed and not the others. False as SaveValue.
+    static bool SaveValues(const std::vector<std::pair<const wchar_t*, json::JsonValue>>& values, const std::wstring& file = GetSettingsFileName());
 
     // The stage monitor entries of a settings "properties" object (the "fancyzones_stageMonitors" value); bad entries and fields are skipped
     static std::map<std::wstring, StageMonitorValues> ParseStageMonitors(const json::JsonObject& monitors);
@@ -209,9 +231,13 @@ private:
     ~FancyZonesSettings() = default;
 
     Settings m_settings;
+    bool m_loaded{}; // LoadSettings ran once: a file that can't be read from then on keeps what was loaded
     std::unique_ptr<FileWatcher> m_settingsFileWatcher;
     std::unordered_set<SettingsObserver*> m_observers;
 
+    static bool Write(json::JsonObject settings, const std::vector<std::pair<const wchar_t*, json::JsonValue>>& values, const std::wstring& file);
+
+    void SetArrange(int mode, const std::wstring& layout);
     void SetBoolFlag(const PowerToysSettings::PowerToyValues& values, const wchar_t* id, SettingId notificationId, bool& out);
 
     void NotifyObservers(SettingId id) const;

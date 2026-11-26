@@ -329,4 +329,28 @@ namespace StageStripMotion
     {
         return (std::max)(0, (std::min)(radius, (std::min)(width, height) / 2));
     }
+
+    // The shape of a tile on the overlay: the thumbnail (rounded at thumbRadius) and, when hovered, the highlight ring around it (the
+    // thumbnail grown by ringPad, rounded at its radius + ringPad so the ring is as wide at the corners as along the edges). The overlay's
+    // region and the painted highlight are both made from this, so nothing of the window's own (grey) background shows. Not hovered:
+    // outer == thumb, one radius.
+    struct TileShape
+    {
+        LRect thumb;
+        LRect outer;
+        int thumbRadius = 0;
+        int outerRadius = 0;
+        bool ring = false;
+    };
+
+    inline TileShape ShapeOf(const LRect& thumb, int radius, bool hovered, int ringPad)
+    {
+        TileShape shape;
+        shape.thumb = thumb;
+        shape.thumbRadius = ClampRadius(radius, thumb.W(), thumb.H());
+        shape.ring = hovered && ringPad > 0;
+        shape.outer = shape.ring ? LRect(thumb.L - ringPad, thumb.T - ringPad, thumb.R + ringPad, thumb.B + ringPad) : thumb;
+        shape.outerRadius = shape.ring ? ClampRadius(shape.thumbRadius > 0 ? shape.thumbRadius + ringPad : 0, shape.outer.W(), shape.outer.H()) : shape.thumbRadius;
+        return shape;
+    }
 }

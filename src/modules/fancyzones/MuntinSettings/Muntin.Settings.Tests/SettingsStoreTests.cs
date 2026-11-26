@@ -65,6 +65,37 @@ public sealed class SettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void SaveModeWritesBothKeysInOneWrite()
+    {
+        File.WriteAllText(FilePath, """{"properties":{"fancyzones_arrangeMode":{"value":0},"fancyzones_stageLayout":{"value":"master"},"fancyzones_dockGap":{"value":4}}}""");
+        var store = new SettingsStore(FilePath);
+
+        Assert.True(store.SaveMode(SettingsSchema.Modes[3])); // Pair with strip
+
+        var properties = store.Load().Properties;
+        Assert.Equal(1, SettingsStore.ReadInt(properties, SettingsSchema.ArrangeMode).Value);
+        Assert.Equal("pair", SettingsStore.ReadString(properties, SettingsSchema.StageLayout).Value);
+        Assert.Equal(4, SettingsStore.ReadInt(properties, SettingsSchema.DockGap).Value);
+        Assert.Equal(3, SettingsSchema.CurrentMode(1, "pair"));
+
+        // Dock writes the mode only: the layout stays for the next time Stage is chosen
+        Assert.True(store.SaveMode(SettingsSchema.Modes[0]));
+        properties = store.Load().Properties;
+        Assert.Equal(0, SettingsStore.ReadInt(properties, SettingsSchema.ArrangeMode).Value);
+        Assert.Equal("pair", SettingsStore.ReadString(properties, SettingsSchema.StageLayout).Value);
+        Assert.Empty(Directory.GetFiles(_folder, "*.tmp"));
+    }
+
+    [Fact]
+    public void SaveModeNeverOverwritesAnUnreadableFile()
+    {
+        const string broken = """{"properties":{"fancyzones_dockGap":{"value":4},""";
+        File.WriteAllText(FilePath, broken);
+        Assert.False(new SettingsStore(FilePath).SaveMode(SettingsSchema.Modes[1]));
+        Assert.Equal(broken, File.ReadAllText(FilePath));
+    }
+
+    [Fact]
     public void SaveClampsInts()
     {
         var store = new SettingsStore(FilePath);
@@ -168,10 +199,55 @@ public sealed class SettingsSchemaTests
         Fits(SettingsSchema.StagePromoteStyle, SettingsSchema.PromoteChoices);
         Fits(SettingsSchema.StageMoveStyle, SettingsSchema.MoveChoices);
         Fits(SettingsSchema.StageStripRadius, SettingsSchema.RadiusChoices);
-        Fits(SettingsSchema.ArrangeMode, SettingsSchema.ArrangeChoices);
+        Assert.All(SettingsSchema.Modes, m => Assert.InRange(m.ArrangeMode, SettingsSchema.ArrangeMode.Min, SettingsSchema.ArrangeMode.Max));
         Fits(SettingsSchema.DesktopScrollPages, SettingsSchema.PageChoices);
         Assert.All(SettingsSchema.Spacings, s => Assert.InRange(s.SliderMax, s.Setting.Min, s.Setting.Max));
-        Assert.All(SettingsSchema.StageLayoutChoices, c => Assert.True(SettingsSchema.IsKnownStageLayout(c.Value)));
+        Assert.All(SettingsSchema.Modes.Where(m => m.ArrangeMode == 1), m => Assert.True(SettingsSchema.IsKnownStageLayout(m.StageLayout)));
+    }
+
+    [Fact]
+    public void ModesAreFlatAndCoverEveryLayout()
+    {
+        Assert.Equal(["Dock (drag to dock)", "Master and stack", "Stage with strip", "Pair with strip"], SettingsSchema.Modes.Select(m => m.Label));
+        Assert.Null(SettingsSchema.Modes[0].StageLayout);
+        Assert.Equal(0, SettingsSchema.Modes[0].ArrangeMode);
+        Assert.Equal(["master", "stage", "pair"], SettingsSchema.Modes.Skip(1).Select(m => m.StageLayout!));
+
+        Assert.Equal(0, SettingsSchema.CurrentMode(0, "pair")); // Dock whatever the layout
+        Assert.Equal(1, SettingsSchema.CurrentMode(1, "master"));
+        Assert.Equal(2, SettingsSchema.CurrentMode(1, "stage"));
+        Assert.Equal(-1, SettingsSchema.CurrentMode(1, "spiral")); // Muntin ignores it and keeps the layout it had: not in the file
+    }
+
+    // Settings.cpp ArrangeFallback: Stage only when there is no settings.json at all
+    [Fact]
+    public void ModeOfAnExistingFileWithoutTheKeysIsDockOrMaster()
+    {
+        Assert.Equal(0, SettingsStore.ReadMode(null, fileExists: true).Index); // Unreadable: Dock
+        Assert.Equal(0, SettingsStore.ReadMode(new JsonObject(), fileExists: true).Index); // No keys: Dock
+
+        var stageOnly = new JsonObject { ["fancyzones_arrangeMode"] = new JsonObject { ["value"] = 1 } };
+        Assert.Equal("Master and stack", SettingsSchema.Modes[SettingsStore.ReadMode(stageOnly, fileExists: true).Index].Label);
+
+        var unknown = new JsonObject
+        {
+            ["fancyzones_arrangeMode"] = new JsonObject { ["value"] = 1 },
+            ["fancyzones_stageLayout"] = new JsonObject { ["value"] = "spiral" },
+        };
+        var (index, note) = SettingsStore.ReadMode(unknown, fileExists: true);
+        Assert.Equal(-1, index);
+        Assert.Contains("keeps the layout it had", note);
+    }
+
+    [Fact]
+    public void FreshInstallIsStageWithStripAndCrossfade()
+    {
+        var empty = new JsonObject();
+        var (mode, note) = SettingsStore.ReadMode(null, fileExists: false);
+        Assert.Equal("Stage with strip", SettingsSchema.Modes[mode].Label);
+        Assert.Null(note);
+        Assert.Equal(1, SettingsStore.ReadInt(empty, SettingsSchema.StagePromoteStyle).Value);
+        Assert.Equal("Crossfade", SettingsSchema.PromoteChoices.Single(c => c.Value == (int)SettingsSchema.StagePromoteStyle.Default).Label);
     }
 
     [Fact]

@@ -19,9 +19,13 @@
         <NavigationView
             x:Name="Nav"
             Grid.Row="1"
+            CompactModeThresholdWidth="560"
+            DisplayModeChanged="Nav_DisplayModeChanged"
+            ExpandedModeThresholdWidth="900"
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
-            PaneDisplayMode="Left"
+            OpenPaneLength="220"
+            PaneDisplayMode="Auto"
             SelectionChanged="Nav_SelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="Arrange" Tag="Arrange">
@@ -55,7 +59,11 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
-            <ScrollViewer x:Name="Scroller" Padding="24,12,24,24">
+            <ScrollViewer
+                x:Name="Scroller"
+                Padding="24,12,24,24"
+                HorizontalScrollBarVisibility="Disabled"
+                HorizontalScrollMode="Disabled">
                 <StackPanel x:Name="Host" MaxWidth="860" />
             </ScrollViewer>
         </NavigationView>

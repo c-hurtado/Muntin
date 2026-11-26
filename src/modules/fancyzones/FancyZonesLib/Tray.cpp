@@ -5,8 +5,6 @@
 #include <thread>
 #include <KnownFolders.h>
 #include <ShlObj.h>
-#include <CommCtrl.h>
-#pragma comment(lib, "comctl32.lib")
 
 #include <common/SettingsAPI/settings_helpers.h>
 #include <common/logger/logger.h>
@@ -21,57 +19,41 @@ namespace
     constexpr UINT IconId = 1;
     constexpr UINT WM_TRAY = WM_APP + 1;
 
-    struct Toggle
+    constexpr wchar_t AnimationsLabel[] = L"Animations"; // fancyzones_dockAnimation; every other setting is in the settings window
+
+    // The arrange modes, one radio group: Stage mode is one of three layouts, Dock is the other mode. Choosing Dock leaves the layout as it is.
+    struct Mode
     {
-        const wchar_t* id;
         const wchar_t* label;
-        bool Settings::*value;
+        int arrangeMode;
+        const wchar_t* stageLayout; // nullptr: not written
     };
 
-    const Toggle Toggles[] = {
-        { NonLocalizable::ShiftDragID, L"Dock only while Shift is held", &Settings::shiftDrag },
-        { NonLocalizable::DockEdgeSnapID, L"Dock at the left and right screen edges", &Settings::dockEdgeSnap },
-        { NonLocalizable::DockAutoTileID, L"Dock new windows by themselves", &Settings::dockAutoTile },
-        { NonLocalizable::OverrideSnapHotKeysID, L"Win+arrow keys move docked windows", &Settings::overrideSnapHotkeys },
-        { NonLocalizable::DockCaptionButtonsID, L"< > buttons on docked windows", &Settings::dockCaptionButtons },
-        { NonLocalizable::DockMiddleClickExpandID, L"Middle click on a title bar expands the window", &Settings::dockMiddleClickExpand },
-        { NonLocalizable::DockAnimationID, L"Animations", &Settings::dockAnimation },
-        { NonLocalizable::DockAnticipationID, L"Pull back slightly before a move", &Settings::dockAnticipation },
-        { NonLocalizable::StageAnimatePromoteID, L"Animate promoting from the strip", &Settings::stageAnimatePromote },
-        { NonLocalizable::DesktopScrollOverviewID, L"Zoom out while scrolling the desktop", &Settings::desktopScrollOverview },
+    const Mode Modes[] = {
+        { L"Dock (drag to dock)", 0, nullptr },
+        { L"Master and stack", 1, L"master" },
+        { L"Stage with strip", 1, L"stage" },
+        { L"Pair with strip", 1, L"pair" },
     };
 
-    struct Choice
+    // The mode the settings are in. Settings.cpp keeps no layout name it does not know, so the last line is never reached.
+    size_t CurrentMode(const Settings& settings) noexcept
     {
-        int value;
-        const wchar_t* label;
-    };
+        if (settings.arrangeMode != 1)
+        {
+            return 0;
+        }
 
-    const Choice MotionChoices[] = { { 0, L"Spring" }, { 1, L"Ease" } };
-    const Choice PromoteChoices[] = { { 0, L"Grow from the tile" }, { 1, L"Crossfade" } };
-    const Choice MoveChoices[] = { { 0, L"Slide" }, { 1, L"Crossfade" } };
-    const Choice RadiusChoices[] = { { 0, L"Square" }, { 6, L"Small" }, { 12, L"Medium" }, { 20, L"Large" }, { 30, L"Round" } };
-    const Choice ArrangeChoices[] = { { 0, L"Dock (drag to dock windows)" }, { 1, L"Stage (one main window, the rest in a strip)" } };
-    const wchar_t* const StageLayoutNames[] = { L"master", L"stage", L"pair" };
-    const wchar_t* const StageLayoutLabels[] = { L"Master and stack", L"Stage with strip", L"Pair with strip" };
-    const Choice PageChoices[] = { { 1, L"1 (no scrolling)" }, { 2, L"2" }, { 3, L"3" }, { MaxDesktopScrollPages, L"4" } };
+        for (size_t i = 1; i < std::size(Modes); ++i)
+        {
+            if (settings.stageLayout == Modes[i].stageLayout)
+            {
+                return i;
+            }
+        }
 
-    // One slider each in the gap and margins dialog; settings.json allows more than the sliders reach
-    struct Spacing
-    {
-        const wchar_t* id;
-        const wchar_t* label;
-        int Settings::*value;
-        int max;
-    };
-
-    const Spacing Spacings[] = {
-        { NonLocalizable::DockGapID, L"Gap", &Settings::dockGap, 30 },
-        { NonLocalizable::DockMarginLeftID, L"Left", &Settings::dockMarginLeft, 15 },
-        { NonLocalizable::DockMarginTopID, L"Top", &Settings::dockMarginTop, 15 },
-        { NonLocalizable::DockMarginRightID, L"Right", &Settings::dockMarginRight, 15 },
-        { NonLocalizable::DockMarginBottomID, L"Bottom", &Settings::dockMarginBottom, 15 },
-    };
+        return 2;
+    }
 
     enum Command : UINT
     {
@@ -80,17 +62,10 @@ namespace
         Help,
         Quit,
         SaveLayoutCommand,
-        SpacingCommand,
         LoadLayoutCommand,
         SettingsCommand,
-        ToggleBase = 100,
-        PagesBase = 300,
-        MotionBase = 400,
-        ArrangeBase = 500,
-        StageLayoutBase = 600,
-        PromoteBase = 700,
-        RadiusBase = 800,
-        MoveBase = 900,
+        AnimationsCommand,
+        ModeBase = 100,
     };
 
     HINSTANCE s_instance{};
@@ -348,78 +323,6 @@ namespace
         }
 
         return name;
-    }
-
-    constexpr int SliderId = 300; // + index into Spacings
-    constexpr int ValueId = 320; // + index into Spacings
-
-    INT_PTR CALLBACK SpacingDialogProc(HWND dialog, UINT message, WPARAM wparam, LPARAM) noexcept
-    {
-        // The values as last saved, so a drag writes settings.json once per step and not once per message
-        static int saved[std::size(Spacings)];
-        static bool failed;
-
-        const auto position = [&](size_t i) { return static_cast<int>(SendDlgItemMessageW(dialog, SliderId + static_cast<int>(i), TBM_GETPOS, 0, 0)); };
-        const auto showValue = [&](size_t i) { SetDlgItemTextW(dialog, ValueId + static_cast<int>(i), (std::to_wstring(position(i)) + L" px").c_str()); };
-
-        if (message == WM_INITDIALOG)
-        {
-            failed = false;
-            const auto& settings = FancyZonesSettings::settings();
-            for (size_t i = 0; i < std::size(Spacings); ++i)
-            {
-                const int slider = SliderId + static_cast<int>(i);
-                SendDlgItemMessageW(dialog, slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, Spacings[i].max));
-                SendDlgItemMessageW(dialog, slider, TBM_SETPOS, TRUE, (std::min)(settings.*Spacings[i].value, Spacings[i].max));
-                saved[i] = position(i);
-                showValue(i);
-            }
-
-            SetForegroundWindow(dialog);
-            return TRUE;
-        }
-
-        // Every step of a drag is applied right away: the file watcher reloads the settings
-        if (message == WM_HSCROLL)
-        {
-            for (size_t i = 0; i < std::size(Spacings); ++i)
-            {
-                showValue(i);
-                if (position(i) != saved[i])
-                {
-                    saved[i] = position(i);
-                    failed |= !FancyZonesSettings::SaveValue(Spacings[i].id, json::value(saved[i]));
-                }
-            }
-
-            return TRUE;
-        }
-
-        if (message == WM_COMMAND && (LOWORD(wparam) == IDOK || LOWORD(wparam) == IDCANCEL))
-        {
-            EndDialog(dialog, failed);
-            return TRUE;
-        }
-
-        return FALSE;
-    }
-
-    // Sliders for the gap and the margins. Returns false when settings.json couldn't be saved.
-    bool EditSpacing()
-    {
-        InitCommonControls(); // The trackbar class
-        constexpr short row = 20;
-        DialogBuilder dialog(L"Gap and margins", static_cast<WORD>(std::size(Spacings) * 3 + 1), 220, static_cast<short>(std::size(Spacings) * row + 36));
-        for (size_t i = 0; i < std::size(Spacings); ++i)
-        {
-            const short y = static_cast<short>(8 + i * row);
-            dialog.AddItem(0, 8, y + 2, 40, 10, static_cast<WORD>(-1), 0x0082, Spacings[i].label);
-            dialog.AddItem(WS_TABSTOP | TBS_AUTOTICKS, 50, y, 124, 14, static_cast<WORD>(SliderId + i), L"msctls_trackbar32", L"");
-            dialog.AddItem(SS_RIGHT, 178, y + 2, 34, 10, static_cast<WORD>(ValueId + i), 0x0082, L"");
-        }
-
-        dialog.AddItem(WS_TABSTOP | BS_DEFPUSHBUTTON, 162, static_cast<short>(std::size(Spacings) * row + 14), 50, 14, IDOK, 0x0080, L"Close");
-        return dialog.Run(SpacingDialogProc, 0) == 0;
     }
 
     // Runs "Muntin.exe save <name>", which also makes the Start menu shortcut, see main.cpp. Names can't hold quotes.
@@ -915,17 +818,6 @@ namespace
         }
     }
 
-    HMENU ChoiceMenu(const Choice* choices, size_t count, int current, UINT base)
-    {
-        HMENU menu = CreatePopupMenu();
-        for (size_t i = 0; i < count; ++i)
-        {
-            AppendMenuW(menu, MF_STRING | (choices[i].value == current ? MF_CHECKED : 0), static_cast<UINT_PTR>(base) + i, choices[i].label);
-        }
-
-        return menu;
-    }
-
     void ShowMenu(POINT at) noexcept
     {
         const Settings& settings = FancyZonesSettings::settings();
@@ -936,31 +828,15 @@ namespace
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"Muntin");
         AppendMenuW(menu, MF_STRING, SettingsCommand, L"Settings...");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        for (size_t i = 0; i < std::size(Toggles); ++i)
+        for (size_t i = 0; i < std::size(Modes); ++i)
         {
-            const bool idle = (Toggles[i].id == NonLocalizable::DockAnticipationID || Toggles[i].id == NonLocalizable::StageAnimatePromoteID) && !settings.dockAnimation; // Nothing moves without animations
-            AppendMenuW(menu, MF_STRING | (settings.*Toggles[i].value ? MF_CHECKED : 0) | (idle ? MF_GRAYED : 0), static_cast<UINT_PTR>(ToggleBase) + i, Toggles[i].label);
+            AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(ModeBase) + i, Modes[i].label);
         }
 
-        AppendMenuW(menu, MF_POPUP | (settings.dockAnimation && settings.stageAnimatePromote ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(ChoiceMenu(PromoteChoices, std::size(PromoteChoices), settings.stagePromoteStyle, PromoteBase)), L"Promote animation");
-        AppendMenuW(menu, MF_POPUP | (settings.dockAnimation ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(ChoiceMenu(MoveChoices, std::size(MoveChoices), settings.stageMoveStyle, MoveBase)), L"Move animation");
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(RadiusChoices, std::size(RadiusChoices), settings.stageStripRadius, RadiusBase)), L"Strip corner radius");
-
-        HMENU arrange = ChoiceMenu(ArrangeChoices, std::size(ArrangeChoices), settings.arrangeMode == 1 ? 1 : 0, ArrangeBase);
-        AppendMenuW(arrange, MF_SEPARATOR, 0, nullptr);
-        for (size_t i = 0; i < std::size(StageLayoutNames); ++i)
-        {
-            // A name nobody knows is the master layout, as in StageConfig
-            const bool known = settings.stageLayout == L"stage" || settings.stageLayout == L"pair";
-            const bool current = known ? settings.stageLayout == StageLayoutNames[i] : i == 0;
-            AppendMenuW(arrange, MF_STRING | (current ? MF_CHECKED : 0) | (settings.arrangeMode == 1 ? 0 : MF_GRAYED), static_cast<UINT_PTR>(StageLayoutBase) + i, StageLayoutLabels[i]);
-        }
-
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(arrange), L"Arrange");
-        AppendMenuW(menu, MF_STRING, SpacingCommand, L"Gap and margins...");
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(MotionChoices, std::size(MotionChoices), settings.dockMotionCurve, MotionBase)), L"Motion curve");
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(PageChoices, std::size(PageChoices), settings.desktopScrollPages, PagesBase)), L"Desktop pages per monitor");
-
+        const UINT current = static_cast<UINT>(ModeBase + CurrentMode(settings));
+        CheckMenuRadioItem(menu, ModeBase, static_cast<UINT>(ModeBase + std::size(Modes) - 1), current, MF_BYCOMMAND);
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING | (settings.dockAnimation ? MF_CHECKED : 0), AnimationsCommand, AnimationsLabel);
         AppendMenuW(menu, MF_STRING, SaveLayoutCommand, L"Save layout...");
         AppendMenuW(menu, MF_STRING, LoadLayoutCommand, L"Load layout...");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -985,42 +861,22 @@ namespace
         {
             PickLayout();
         }
-        else if (command >= ArrangeBase && command - ArrangeBase < std::size(ArrangeChoices))
+        else if (command >= ModeBase && command - ModeBase < std::size(Modes))
         {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::ArrangeModeID, json::value(ArrangeChoices[command - ArrangeBase].value));
+            // Both keys in one write: the reload never sees the new mode with the old layout
+            const Mode& mode = Modes[command - ModeBase];
+            std::vector<std::pair<const wchar_t*, json::JsonValue>> values;
+            if (mode.stageLayout)
+            {
+                values.emplace_back(NonLocalizable::StageLayoutID, json::value(std::wstring{ mode.stageLayout }));
+            }
+
+            values.emplace_back(NonLocalizable::ArrangeModeID, json::value(mode.arrangeMode));
+            saved = FancyZonesSettings::SaveValues(values);
         }
-        else if (command >= StageLayoutBase && command - StageLayoutBase < std::size(StageLayoutNames))
+        else if (command == AnimationsCommand)
         {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::StageLayoutID, json::value(std::wstring{ StageLayoutNames[command - StageLayoutBase] }));
-        }
-        else if (command == SpacingCommand)
-        {
-            saved = EditSpacing();
-        }
-        else if (command >= MotionBase && command - MotionBase < std::size(MotionChoices))
-        {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::DockMotionCurveID, json::value(MotionChoices[command - MotionBase].value));
-        }
-        else if (command >= PromoteBase && command - PromoteBase < std::size(PromoteChoices))
-        {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::StagePromoteStyleID, json::value(PromoteChoices[command - PromoteBase].value));
-        }
-        else if (command >= MoveBase && command - MoveBase < std::size(MoveChoices))
-        {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::StageMoveStyleID, json::value(MoveChoices[command - MoveBase].value));
-        }
-        else if (command >= RadiusBase && command - RadiusBase < std::size(RadiusChoices))
-        {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::StageStripRadiusID, json::value(RadiusChoices[command - RadiusBase].value));
-        }
-        else if (command >= PagesBase && command - PagesBase < std::size(PageChoices))
-        {
-            saved = FancyZonesSettings::SaveValue(NonLocalizable::DesktopScrollPagesID, json::value(PageChoices[command - PagesBase].value));
-        }
-        else if (command >= ToggleBase && command - ToggleBase < std::size(Toggles))
-        {
-            const auto& toggle = Toggles[command - ToggleBase];
-            saved = FancyZonesSettings::SaveValue(toggle.id, json::value(!(settings.*toggle.value)));
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::DockAnimationID, json::value(!settings.dockAnimation));
         }
         else if (command == SaveLayoutCommand)
         {
@@ -1118,7 +974,7 @@ void Tray::Start(HINSTANCE instance, bool welcome) noexcept
     {
         NOTIFYICONDATAW data{ .cbSize = sizeof(NOTIFYICONDATAW), .hWnd = s_window, .uID = IconId, .uFlags = NIF_INFO };
         wcscpy_s(data.szInfoTitle, L"Muntin is running");
-        wcscpy_s(data.szInfo, L"Hold Shift while you drag a window to dock it. Right-click this icon for settings.");
+        wcscpy_s(data.szInfo, L"Right-click this icon to choose how windows are arranged, or to open Settings.");
         data.dwInfoFlags = NIIF_INFO;
         Shell_NotifyIconW(NIM_MODIFY, &data);
     }

@@ -19,7 +19,8 @@ namespace StageConfig
 {
     struct Values
     {
-        std::wstring layout = L"master"; // stage, pair or master
+        std::wstring layout = L"master"; // stage, pair or master. Not Settings' fresh-install "stage" on purpose: master is the
+                                         // fallback of an install from before (ArrangeFallback in Settings.h), as in EffectiveLayoutName
         int pairCut = 500; // thousandths, 150 .. 850
         int masterCut = 600;
         std::wstring rows; // master stack height shares, thousandths, comma separated; empty = equal

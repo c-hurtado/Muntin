@@ -19,11 +19,12 @@ namespace
 {
     constexpr wchar_t ControlClass[] = L"MuntinStageStripControl";
     constexpr wchar_t OverlayClass[] = L"MuntinStageStrip";
+    constexpr wchar_t WellClass[] = L"MuntinStageStripWell";
     constexpr UINT WM_STRIP_SYNC = WM_APP + 1;
     constexpr UINT WM_STRIP_STOP = WM_APP + 2;
     constexpr UINT WaitMillis = 500;
-    constexpr COLORREF TileColor = RGB(0x1B, 0x1B, 0x20); // as StageProto's strip
-    constexpr COLORREF HoverColor = RGB(0x4A, 0x4A, 0x5C); // the tile under the cursor
+    constexpr COLORREF TileColor = RGB(0x1B, 0x1B, 0x20); // a tile without a thumbnail (and what a thumbnail's transparent corners show)
+    constexpr BYTE WellAlpha = 1; // the well under the tiles: invisible, but a layered window with alpha 0 would let the mouse through
     constexpr UINT WM_STRIP_RADIUS = WM_APP + 3;
     constexpr UINT_PTR AnimTimer = 1;
     constexpr UINT_PTR SettleTimer = 2;
@@ -44,7 +45,6 @@ struct StageStrip::Impl
     HINSTANCE instance{};
     HWND control{};
     HBRUSH brush{};
-    HBRUSH hoverBrush{};
     bool timerOn{};
     std::thread thread;
 
@@ -58,7 +58,8 @@ struct StageStrip::Impl
     // Render thread only
     struct Shown
     {
-        HWND overlay{};
+        HWND overlay{}; // the thumbnails, shaped to them: everything else is see-through
+        HWND well{}; // under the overlay, from the first drawn tile to the last: takes the wheel (and swallows clicks) between the tiles
         StageStripPlan::Strip strip; // what is applied; a tile whose thumbnail could not be registered is stored as not live, so the next picture retries it
         std::map<std::uintptr_t, HTHUMBNAIL> thumbs;
         std::map<std::uintptr_t, SIZE> lastSource; // the source size the crop of the thumbnail was computed from
@@ -95,7 +96,6 @@ struct StageStrip::Impl
         SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); // physical pixels, as the stage computes them
         self = this;
         brush = CreateSolidBrush(TileColor);
-        hoverBrush = CreateSolidBrush(HoverColor);
 
         WNDCLASSEXW controlClass{};
         controlClass.cbSize = sizeof(controlClass);
@@ -112,6 +112,15 @@ struct StageStrip::Impl
         overlayClass.hbrBackground = brush;
         overlayClass.lpszClassName = OverlayClass;
         RegisterClassExW(&overlayClass);
+
+        WNDCLASSEXW wellClass{};
+        wellClass.cbSize = sizeof(wellClass);
+        wellClass.lpfnWndProc = WellProc;
+        wellClass.hInstance = instance;
+        wellClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wellClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        wellClass.lpszClassName = WellClass;
+        RegisterClassExW(&wellClass);
 
         this->control = CreateWindowExW(0, ControlClass, L"", WS_POPUP, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, nullptr);
         ready.set_value();
@@ -138,9 +147,9 @@ struct StageStrip::Impl
         }
 
         UnregisterClassW(OverlayClass, instance);
+        UnregisterClassW(WellClass, instance);
         UnregisterClassW(ControlClass, instance);
         DeleteObject(brush);
-        DeleteObject(hoverBrush);
         self = nullptr;
     }
 
@@ -192,6 +201,45 @@ struct StageStrip::Impl
         }
 
         return nullptr;
+    }
+
+    Shown* FindWell(HWND well) noexcept
+    {
+        for (auto& s : shown)
+        {
+            if (s.well == well)
+            {
+                return &s;
+            }
+        }
+
+        return nullptr;
+    }
+
+    // Between the tiles: the wheel scrolls the strip as it does over a tile; a click does nothing (it would reach the desktop otherwise)
+    static LRESULT CALLBACK WellProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) noexcept
+    {
+        switch (message)
+        {
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_MOUSEWHEEL:
+            if (auto* s = self ? self->FindWell(hwnd) : nullptr)
+            {
+                self->Wheel(*s, GET_WHEEL_DELTA_WPARAM(wparam));
+            }
+
+            return 0;
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, wparam, lparam);
+        }
     }
 
     // The tile (window) under a client point of an overlay
@@ -265,25 +313,9 @@ struct StageStrip::Impl
             return 0;
         case WM_PAINT:
         {
+            // No hover highlight: a hovered tile only grows (Place), so the strip stays see-through. The class brush erases what the region shows.
             PAINTSTRUCT paint;
-            const HDC dc = BeginPaint(hwnd, &paint);
-            if (auto* s = self ? self->Find(hwnd) : nullptr)
-            {
-                const auto it = s->hover ? s->motion.find(s->hover) : s->motion.end();
-                if (it != s->motion.end())
-                {
-                    // Hugs the thumbnail (not the whole tile, which is wider or taller than a window of another shape)
-                    RECT r = Local(it->second.cur, s->strip.area);
-                    if (const auto fit = s->lastFit.find(s->hover); fit != s->lastFit.end())
-                    {
-                        constexpr int HoverPad = 4;
-                        r = { fit->second.left - HoverPad, fit->second.top - HoverPad, fit->second.right + HoverPad, fit->second.bottom + HoverPad };
-                    }
-
-                    FillRect(dc, &r, self->hoverBrush); // the pad around the (raised) thumbnail
-                }
-            }
-
+            BeginPaint(hwnd, &paint);
             EndPaint(hwnd, &paint);
             return 0;
         }
@@ -317,11 +349,107 @@ struct StageStrip::Impl
             DestroyWindow(s.overlay);
             s.overlay = nullptr;
         }
+
+        if (s.well)
+        {
+            DestroyWindow(s.well);
+            s.well = nullptr;
+        }
+    }
+
+    // The well spans the tiles where they are drawn now (their bounding box, cut at the strip's edges), so the empty rest of the strip
+    // column stays clickable: the desktop, or a window over it. Hidden while there is no tile, or while the overlay is. reorder: put
+    // it right under the overlay again (once it is shown); otherwise its place in the z-order is kept.
+    static void PlaceWell(const Shown& s, bool reorder) noexcept
+    {
+        if (!s.well)
+        {
+            return;
+        }
+
+        RECT span{};
+        for (const auto& tile : s.strip.tiles)
+        {
+            const auto it = s.motion.find(tile.window);
+            const auto& r = it != s.motion.end() ? it->second.cur : tile.rect;
+            const RECT rect{ r.L, r.T, r.R, r.B };
+            UnionRect(&span, &span, &rect);
+        }
+
+        if (s.strip.clip.W() > 0 && s.strip.clip.H() > 0)
+        {
+            const RECT clip{ s.strip.clip.L, s.strip.clip.T, s.strip.clip.R, s.strip.clip.B };
+            IntersectRect(&span, &span, &clip);
+        }
+
+        if (IsRectEmpty(&span) || !IsWindowVisible(s.overlay))
+        {
+            if (IsWindowVisible(s.well))
+            {
+                ShowWindow(s.well, SW_HIDE);
+            }
+
+            return;
+        }
+
+        SetWindowPos(s.well, reorder ? s.overlay : nullptr, span.left, span.top, span.right - span.left, span.bottom - span.top, SWP_NOACTIVATE | SWP_SHOWWINDOW | (reorder ? 0 : SWP_NOZORDER));
     }
 
     static RECT Local(const StageLayouts::LRect& r, const StageLayouts::LRect& area) noexcept
     {
         return { r.L - area.L, r.T - area.T, r.R - area.L, r.B - area.T };
+    }
+
+    // The shape of a tile on the overlay (strip-local): the thumbnail where Place last fit it, with the highlight ring when hovered; a
+    // tile without a fit (no thumbnail yet, or not live) is its drawn rect. ApplyRegion and WM_PAINT both use it.
+    static StageStripMotion::TileShape ShapeFor(const Shown& s, std::uintptr_t window, bool live) noexcept
+    {
+        const auto it = s.motion.find(window);
+        const auto* tile = StageStripPlan::FindTile(s.strip.tiles, window);
+        RECT r = it != s.motion.end() ? Local(it->second.cur, s.strip.area) : tile ? Local(tile->rect, s.strip.area) : RECT{};
+        if (const auto fit = s.lastFit.find(window); live && fit != s.lastFit.end())
+        {
+            r = fit->second; // set by Place, which runs before this wherever the tiles move
+        }
+
+        return StageStripMotion::ShapeOf(StageLayouts::LRect(r.left, r.top, r.right, r.bottom), self->radius.load(), false, 0); // no hover ring: the hovered thumbnail just grows
+    }
+
+    static HRGN RoundRegion(const StageLayouts::LRect& r, int radius) noexcept
+    {
+        HRGN rgn = radius > 0 ? CreateRoundRectRgn(r.L, r.T, r.R + 1, r.B + 1, radius * 2, radius * 2) : nullptr;
+        return rgn ? rgn : CreateRectRgn(r.L, r.T, r.R, r.B); // a plain rect where the system cannot make the rounded one
+    }
+
+    // The region of a shape: the rounded outer rect; with a ring, its middle (the thumbnail's square rect) is swapped for the thumbnail
+    // rounded at its own radius, so the thumbnail's corners are cut as they are at rest. The caller owns (deletes or hands off) the result.
+    static HRGN RegionOf(const StageStripMotion::TileShape& shape) noexcept
+    {
+        HRGN rgn = RoundRegion(shape.outer, shape.outerRadius);
+        if (!rgn || !shape.ring)
+        {
+            return rgn;
+        }
+
+        HRGN square = CreateRectRgn(shape.thumb.L, shape.thumb.T, shape.thumb.R, shape.thumb.B);
+        HRGN round = RoundRegion(shape.thumb, shape.thumbRadius);
+        if (square && round)
+        {
+            CombineRgn(rgn, rgn, square, RGN_DIFF);
+            CombineRgn(rgn, rgn, round, RGN_OR);
+        }
+
+        if (square)
+        {
+            DeleteObject(square);
+        }
+
+        if (round)
+        {
+            DeleteObject(round);
+        }
+
+        return rgn;
     }
 
     static void Place(Shown& s, const StageStripPlan::Tile& tile) noexcept
@@ -368,8 +496,9 @@ struct StageStrip::Impl
         DwmUpdateThumbnailProperties(it->second, &properties);
     }
 
-    // The overlay's shape: the union of the tiles where they are drawn now, with rounded corners (a plain rect where the system
-    // cannot make the region). Everything outside is transparent and click-through.
+    // The overlay's shape: the thumbnails where they are drawn now (with the highlight around the hovered one), with rounded corners
+    // (a plain rect where the system cannot make the region). A tile without a thumbnail keeps its dark tile, or it would vanish.
+    // Everything else is transparent, and the mouse goes through to the well below.
     static void ApplyRegion(Shown& s) noexcept
     {
         HRGN all = CreateRectRgn(0, 0, 0, 0);
@@ -377,13 +506,10 @@ struct StageStrip::Impl
         HRGN viewRgn = CreateRectRgn(view.left, view.top, view.right, view.bottom); // tiles on their way in or out are cut at the strip's edges
         for (const auto& tile : s.strip.tiles)
         {
-            const auto it = s.motion.find(tile.window);
-            const RECT r = Local(it != s.motion.end() ? it->second.cur : tile.rect, s.strip.area);
-            const int radius = StageStripMotion::ClampRadius(self->radius.load(),r.right - r.left, r.bottom - r.top);
-            HRGN part = radius > 0 ? CreateRoundRectRgn(r.left, r.top, r.right + 1, r.bottom + 1, radius * 2, radius * 2) : nullptr;
+            HRGN part = RegionOf(ShapeFor(s, tile.window, tile.live));
             if (!part)
             {
-                part = CreateRectRgn(r.left, r.top, r.right, r.bottom);
+                continue;
             }
 
             if (s.strip.clip.W() > 0 && s.strip.clip.H() > 0)
@@ -397,9 +523,10 @@ struct StageStrip::Impl
 
         DeleteObject(viewRgn);
         SetWindowRgn(s.overlay, all, TRUE); // the system owns the region from here
+        PlaceWell(s, false); // every relayout, scroll step and settle comes through here
         if (s.hover)
         {
-            InvalidateRect(s.overlay, nullptr, TRUE); // the hover pad follows the tile
+            InvalidateRect(s.overlay, nullptr, TRUE);
         }
     }
 
@@ -420,6 +547,7 @@ struct StageStrip::Impl
             }
         }
 
+        ApplyRegion(s); // the highlight is part of the shape
         InvalidateRect(s.overlay, nullptr, TRUE);
     }
 
@@ -595,9 +723,18 @@ struct StageStrip::Impl
         if (change.kind == StageStripPlan::Kind::Create || !s)
         {
             Shown fresh;
+            // The well first: the overlay, made after it, is above it
+            fresh.well = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED, WellClass, L"", WS_POPUP, change.next.area.L, change.next.area.T, change.next.area.W(), change.next.area.H(), nullptr, nullptr, instance, nullptr);
+            if (fresh.well && !SetLayeredWindowAttributes(fresh.well, 0, WellAlpha, LWA_ALPHA))
+            {
+                DestroyWindow(fresh.well); // without it the wheel between the tiles reaches what is behind
+                fresh.well = nullptr;
+            }
+
             fresh.overlay = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, OverlayClass, L"", WS_POPUP, change.next.area.L, change.next.area.T, change.next.area.W(), change.next.area.H(), nullptr, nullptr, instance, nullptr);
             if (!fresh.overlay)
             {
+                Destroy(fresh);
                 return; // The next picture tries again (the strip is not in 'shown', so it is a Create again)
             }
 
@@ -674,6 +811,7 @@ struct StageStrip::Impl
         if (!IsWindowVisible(s->overlay))
         {
             ShowWindow(s->overlay, SW_SHOWNOACTIVATE);
+            PlaceWell(*s, true); // shown with the overlay, right under it
         }
 
         StartSettle();
@@ -723,6 +861,7 @@ struct StageStrip::Impl
         std::vector<StageStripPlan::Tile> notInOrder;
         for (auto& s : shown)
         {
+            bool placed = false;
             for (const auto& tile : s.strip.tiles)
             {
                 const auto given = gaveUp.find(tile.window);
@@ -778,7 +917,13 @@ struct StageStrip::Impl
                 if (registered && StageStripMotion::ShouldReplace(now.cx, now.cy, last.cx, last.cy, step))
                 {
                     Place(s, tile);
+                    placed = true;
                 }
+            }
+
+            if (placed)
+            {
+                ApplyRegion(s); // the outline follows the thumbnail's new fit
             }
         }
 
