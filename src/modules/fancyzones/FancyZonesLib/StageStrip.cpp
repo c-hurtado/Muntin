@@ -60,6 +60,7 @@ struct StageStrip::Impl
         StageStripPlan::Strip strip; // what is applied; a tile whose thumbnail could not be registered is stored as not live, so the next picture retries it
         std::map<std::uintptr_t, HTHUMBNAIL> thumbs;
         std::map<std::uintptr_t, SIZE> lastSource; // the source size the crop of the thumbnail was computed from
+        std::map<std::uintptr_t, RECT> lastFit; // where the thumbnail was last drawn (strip-local): the hover highlight hugs it
         std::map<std::uintptr_t, StageStripMotion::Motion> motion; // where each tile of 'strip' is drawn, and on its way to where
         std::uintptr_t pressed{};
         std::uintptr_t hover{};
@@ -258,7 +259,14 @@ struct StageStrip::Impl
                 const auto it = s->hover ? s->motion.find(s->hover) : s->motion.end();
                 if (it != s->motion.end())
                 {
-                    const RECT r = Local(it->second.cur, s->strip.area);
+                    // Hugs the thumbnail (not the whole tile, which is wider or taller than a window of another shape)
+                    RECT r = Local(it->second.cur, s->strip.area);
+                    if (const auto fit = s->lastFit.find(s->hover); fit != s->lastFit.end())
+                    {
+                        constexpr int HoverPad = 4;
+                        r = { fit->second.left - HoverPad, fit->second.top - HoverPad, fit->second.right + HoverPad, fit->second.bottom + HoverPad };
+                    }
+
                     FillRect(dc, &r, self->hoverBrush); // the pad around the (raised) thumbnail
                 }
             }
@@ -279,6 +287,7 @@ struct StageStrip::Impl
             DwmUnregisterThumbnail(it->second);
             s.thumbs.erase(it);
             s.lastSource.erase(window);
+            s.lastFit.erase(window);
         }
     }
 
@@ -338,6 +347,7 @@ struct StageStrip::Impl
         // A parked window keeps its own shape: shown as large as fits the tile, centered (not stretched to it). With the size unknown the
         // whole tile (FitRect). The rounded tile behind it is letterboxed: the thumbnail itself stays square-cornered.
         properties.rcDestination = Local(StageStripMotion::FitRect(box, shownW, shownH), s.strip.area);
+        s.lastFit[tile.window] = properties.rcDestination;
 
         properties.opacity = 255;
         properties.fVisible = TRUE;
