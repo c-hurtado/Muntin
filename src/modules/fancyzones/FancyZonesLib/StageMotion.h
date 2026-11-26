@@ -144,7 +144,8 @@ namespace StageMotion
     {
         Travel, // from the start rect (default: where the window is) to the end rect (default: where the window is when it has moved)
         FadeIn, // sits at `from`, opacity 0 to 1 over the ease time
-        FadeOut // sits at `from`, opacity 1 to 0
+        FadeOut, // sits at `from`, opacity 1 to 0
+        FadeThrough // a move between docked slots as a crossfade: DockMotion draws a FadeOut sprite at `from` and a FadeIn sprite at `to` (see FadeThroughParts)
     };
 
     struct Spec
@@ -264,6 +265,45 @@ namespace StageMotion
         return spec;
     }
 
+    // How a move between docked slots looks (the tray "Move animation", settings().stageMoveStyle)
+    enum class MoveStyle
+    {
+        Slide = 0, // the sprite travels from the old rect to the new one
+        Crossfade = 1 // the sprite fades out at the old rect while another fades in at the new one
+    };
+
+    constexpr MoveStyle MoveStyleOf(int setting)
+    {
+        return setting == 1 ? MoveStyle::Crossfade : MoveStyle::Slide;
+    }
+
+    // The sprite of a window that stays docked and moves from oldRect to newRect (same monitor). Slide: the default Travel spec.
+    inline Spec MovedSpec(MoveStyle style, const StageLayouts::LRect& oldRect, const StageLayouts::LRect& newRect)
+    {
+        Spec spec;
+        if (style == MoveStyle::Crossfade && oldRect.W() > 0 && oldRect.H() > 0 && newRect.W() > 0 && newRect.H() > 0)
+        {
+            spec.kind = Kind::FadeThrough;
+            spec.from = oldRect;
+            spec.to = newRect;
+        }
+
+        return spec;
+    }
+
+    // The two sprites a FadeThrough spec stands for: [0] fades out at the old rect, [1] fades in at the new one. Other kinds: nothing.
+    inline std::vector<Spec> FadeThroughParts(const Spec& spec)
+    {
+        std::vector<Spec> parts;
+        if (spec.kind == Kind::FadeThrough && spec.from && spec.to)
+        {
+            parts.push_back({ Kind::FadeOut, spec.from, spec.from });
+            parts.push_back({ Kind::FadeIn, spec.to, spec.to });
+        }
+
+        return parts;
+    }
+
     // Whether a glider out from behind the master needs the other docked windows held too (ExtraHolds): only when its sprite starts there.
     // A Grow from a known tile starts on the strip, and a Crossfade never leaves its slot.
     constexpr bool NeedsExtraHolds(PromoteStyle style, bool parkedBehind, bool tileKnown)
@@ -281,6 +321,65 @@ namespace StageMotion
     inline int OpacityByte(Kind kind, double progress)
     {
         return static_cast<int>(std::lround(Opacity(kind, progress) * 255));
+    }
+
+    // How a sprite looks on screen: its rect (left, top, right, bottom, screen pixels) and opacity (0 to 255)
+    struct Look
+    {
+        std::array<double, 4> place{};
+        int opacity{ 255 };
+    };
+
+    // Where the fade-out half (the ghost) of a crossfaded move starts: where the window is seen now. A quick second move: the window's
+    // live sprite (mid-travel or mid-fade, at its opacity); else the old rect, opaque. Not a FadeThrough spec: no ghost.
+    inline std::optional<Look> GhostStart(const Spec& spec, const std::optional<Look>& live)
+    {
+        const auto parts = FadeThroughParts(spec);
+        if (parts.empty())
+        {
+            return std::nullopt;
+        }
+
+        if (live)
+        {
+            return Look{ live->place, std::clamp(live->opacity, 0, 255) };
+        }
+
+        const auto& old = *parts[0].from;
+        return Look{ { static_cast<double>(old.L), static_cast<double>(old.T), static_cast<double>(old.R), static_cast<double>(old.B) }, 255 };
+    }
+
+    // A ghost's opacity at this share of its fade: from its start opacity to 0
+    inline int GhostOpacityByte(int start, double progress)
+    {
+        return static_cast<int>(std::lround(std::clamp(start, 0, 255) * Opacity(Kind::FadeOut, progress)));
+    }
+
+    // The order DockMotion registers the thumbnails of one hold in (DWM stacks a later thumbnail above an earlier one). specs: the held
+    // windows' specs, bottom of the z-order first. Every ghost first, so none covers a travelling or fading sprite; then the live sprites.
+    struct Registration
+    {
+        size_t index{}; // into specs
+        bool ghost{};
+    };
+
+    inline std::vector<Registration> RegistrationOrder(const std::vector<Spec>& specs)
+    {
+        std::vector<Registration> order;
+        for (size_t i = 0; i < specs.size(); ++i)
+        {
+            if (!FadeThroughParts(specs[i]).empty())
+            {
+                order.push_back({ i, true });
+            }
+        }
+
+        for (size_t i = 0; i < specs.size(); ++i)
+        {
+            order.push_back({ i, false });
+        }
+
+        return order;
     }
 
     // Leaving stage mode: whether the windows glide back (not on a shutdown, and only when the leave itself is a user's switch)

@@ -95,6 +95,7 @@ namespace NonLocalizable
     const wchar_t DockAnticipationID[] = L"fancyzones_dockAnticipation";
     const wchar_t StageAnimatePromoteID[] = L"fancyzones_stageAnimatePromote";
     const wchar_t StagePromoteStyleID[] = L"fancyzones_stagePromoteStyle";
+    const wchar_t StageMoveStyleID[] = L"fancyzones_stageMoveStyle";
     const wchar_t StageStripRadiusID[] = L"fancyzones_stageStripRadius";
     const wchar_t DockMiddleClickExpandID[] = L"fancyzones_dockMiddleClickExpand";
     const wchar_t DockEdgeSnapID[] = L"fancyzones_dockEdgeSnap";

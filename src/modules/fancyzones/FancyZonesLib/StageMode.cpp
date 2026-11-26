@@ -921,12 +921,14 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         bool wasParked{};
         StageMotion::Candidate facts;
         std::optional<Rect> tile; // wasParked: its strip tile (as an outer rect), when known
+        Rect oldRect; // where it is now (outer)
     };
     std::vector<DockedMove> dockedMoves;
 
     // The promote and demote animations (the optional setting, with Animations): the windows that move between a strip tile and a slot
     const bool promoteAnimated = StageMotion::PromoteGlideAvailable && FancyZonesSettings::settings().stageAnimatePromote && FancyZonesSettings::settings().dockAnimation && !dockedOnly && m_motion.holdSpecs && m_motion.release;
     const auto promoteStyle = StageMotion::StyleOf(FancyZonesSettings::settings().stagePromoteStyle);
+    const auto moveStyle = StageMotion::MoveStyleOf(FancyZonesSettings::settings().stageMoveStyle); // docked to docked, same monitor
     auto outerOfTile = [](const Rect& tile, const Managed& m, const RECT& at) {
         return StageMotion::OuterForTile(tile, { m.insets.L, m.insets.T, m.insets.R, m.insets.B }, at.right - at.left, at.bottom - at.top);
     };
@@ -1041,6 +1043,7 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
                 move.facts.parkedBehind = StageMotion::NeedsExtraHolds(promoteStyle, behind, move.tile.has_value());
             }
             move.facts.moves = !GetWindowRect(m.window, &now) || !ToRect(now).Same(move.outer);
+            move.oldRect = ToRect(now);
             move.facts.cloaked = IsCloaked(m.window);
             move.facts.fullscreen = m.fullscreen;
             move.facts.changesMonitor = MonitorFromWindow(m.window, MONITOR_DEFAULTTONEAREST) != stage.monitor.handle;
@@ -1140,6 +1143,10 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
                 {
                     promoteGlides = true;
                     spec = StageMotion::PromotedSpec(promoteStyle, move.tile, move.outer);
+                }
+                else
+                {
+                    spec = StageMotion::MovedSpec(moveStyle, move.oldRect, move.outer); // Slide: the default travel
                 }
 
                 held.push_back({ move.window->window, spec });

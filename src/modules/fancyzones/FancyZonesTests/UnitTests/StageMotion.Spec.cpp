@@ -238,6 +238,107 @@ namespace StageMotionUnitTests
             Assert::IsTrue(fade->from->Same(old) && fade->to->Same(old));
         }
 
+        TEST_METHOD(TheMoveStyleSettingMapsToSlideOrCrossfade)
+        {
+            Assert::IsTrue(MoveStyleOf(0) == MoveStyle::Slide);
+            Assert::IsTrue(MoveStyleOf(1) == MoveStyle::Crossfade);
+            Assert::IsTrue(MoveStyleOf(5) == MoveStyle::Slide, L"anything else: the default");
+            Assert::IsTrue(MoveStyleOf(-1) == MoveStyle::Slide);
+        }
+
+        TEST_METHOD(ASlideMoveIsThePlainTravelAndACrossfadeFadesOldIntoNew)
+        {
+            const StageLayouts::LRect old(0, 0, 500, 800), now(500, 0, 1000, 800);
+            const auto slide = MovedSpec(MoveStyle::Slide, old, now);
+            Assert::IsTrue(slide.kind == Kind::Travel);
+            Assert::IsFalse(slide.from.has_value() || slide.to.has_value(), L"the sprite travels from the window to the window");
+            Assert::IsTrue(FadeThroughParts(slide).empty());
+
+            const auto fade = MovedSpec(MoveStyle::Crossfade, old, now);
+            Assert::IsTrue(fade.kind == Kind::FadeThrough);
+            const auto parts = FadeThroughParts(fade);
+            Assert::AreEqual(static_cast<size_t>(2), parts.size());
+            Assert::IsTrue(parts[0].kind == Kind::FadeOut && parts[0].from->Same(old) && parts[0].to->Same(old));
+            Assert::IsTrue(parts[1].kind == Kind::FadeIn && parts[1].from->Same(now) && parts[1].to->Same(now));
+            Assert::AreEqual(255, OpacityByte(parts[0].kind, 0) );
+            Assert::AreEqual(0, OpacityByte(parts[1].kind, 0));
+            Assert::AreEqual(OpacityByte(parts[0].kind, 0.25), 255 - OpacityByte(parts[1].kind, 0.25), L"complementary");
+        }
+
+        TEST_METHOD(ACrossfadeWithoutAKnownOldRectSlidesInstead)
+        {
+            const StageLayouts::LRect now(500, 0, 1000, 800), none(0, 0, 0, 0);
+            Assert::IsTrue(MovedSpec(MoveStyle::Crossfade, none, now).kind == Kind::Travel);
+            Assert::IsTrue(MovedSpec(MoveStyle::Crossfade, now, none).kind == Kind::Travel);
+        }
+
+        TEST_METHOD(AGhostStartsAtTheOldRectOpaqueWithoutALiveSprite)
+        {
+            const StageLayouts::LRect old(0, 0, 500, 800), now(500, 0, 1000, 800);
+            const auto start = GhostStart(MovedSpec(MoveStyle::Crossfade, old, now), std::nullopt);
+            Assert::IsTrue(start.has_value());
+            Assert::IsTrue(start->place == std::array<double, 4>{ 0, 0, 500, 800 });
+            Assert::AreEqual(255, start->opacity);
+        }
+
+        TEST_METHOD(AQuickSecondMoveStartsTheGhostWhereTheLiveSpriteIsSeen)
+        {
+            const StageLayouts::LRect old(0, 0, 500, 800), now(500, 0, 1000, 800);
+            const Look live{ { 250, 10, 750, 810 }, 128 };
+            const auto start = GhostStart(MovedSpec(MoveStyle::Crossfade, old, now), live);
+            Assert::IsTrue(start.has_value());
+            Assert::IsTrue(start->place == live.place, L"from the sprite mid-animation, not the old rect");
+            Assert::AreEqual(128, start->opacity, L"at its current opacity, not opaque");
+            Assert::AreEqual(255, GhostStart(MovedSpec(MoveStyle::Crossfade, old, now), Look{ live.place, 400 })->opacity, L"clamped");
+        }
+
+        TEST_METHOD(OnlyACrossfadeHasAGhost)
+        {
+            const StageLayouts::LRect old(0, 0, 500, 800), now(500, 0, 1000, 800);
+            Assert::IsFalse(GhostStart(MovedSpec(MoveStyle::Slide, old, now), std::nullopt).has_value());
+            Assert::IsFalse(GhostStart(MovedSpec(MoveStyle::Slide, old, now), Look{}).has_value());
+            Spec fadeIn{ Kind::FadeIn, now, now };
+            Assert::IsFalse(GhostStart(fadeIn, std::nullopt).has_value());
+        }
+
+        TEST_METHOD(AGhostFadesOutFromItsStartOpacity)
+        {
+            Assert::AreEqual(OpacityByte(Kind::FadeOut, 0), GhostOpacityByte(255, 0));
+            Assert::AreEqual(OpacityByte(Kind::FadeOut, 0.4), GhostOpacityByte(255, 0.4), L"from opaque: the plain fade out");
+            Assert::AreEqual(128, GhostOpacityByte(128, 0));
+            Assert::AreEqual(64, GhostOpacityByte(128, 0.5));
+            Assert::AreEqual(0, GhostOpacityByte(128, 1));
+            Assert::AreEqual(0, GhostOpacityByte(-5, 0.2));
+        }
+
+        TEST_METHOD(GhostsAreRegisteredBeforeEveryLiveSprite)
+        {
+            const StageLayouts::LRect a(0, 0, 500, 800), b(500, 0, 1000, 800);
+            const std::vector<Spec> specs{ Spec{}, MovedSpec(MoveStyle::Crossfade, a, b), Spec{}, MovedSpec(MoveStyle::Crossfade, b, a) };
+            const auto order = RegistrationOrder(specs);
+            Assert::AreEqual(static_cast<size_t>(6), order.size());
+            Assert::IsTrue(order[0].ghost && order[0].index == 1);
+            Assert::IsTrue(order[1].ghost && order[1].index == 3);
+            for (size_t i = 2; i < order.size(); ++i)
+            {
+                Assert::IsFalse(order[i].ghost);
+                Assert::AreEqual(i - 2, order[i].index, L"the live sprites keep the z-order");
+            }
+        }
+
+        TEST_METHOD(ASlideHoldRegistersOnlyLiveSpritesInZOrder)
+        {
+            const StageLayouts::LRect a(0, 0, 500, 800), b(500, 0, 1000, 800);
+            const std::vector<Spec> specs{ MovedSpec(MoveStyle::Slide, a, b), Spec{ Kind::FadeIn, b, b }, Spec{} };
+            const auto order = RegistrationOrder(specs);
+            Assert::AreEqual(static_cast<size_t>(3), order.size());
+            for (size_t i = 0; i < order.size(); ++i)
+            {
+                Assert::IsFalse(order[i].ghost);
+                Assert::AreEqual(i, order[i].index);
+            }
+        }
+
         TEST_METHOD(ADemotedWindowOnlyAnimatesWithAPromotionThatGlidesAndNoSkip)
         {
             Candidate d;

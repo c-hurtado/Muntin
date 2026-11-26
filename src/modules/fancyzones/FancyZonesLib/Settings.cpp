@@ -172,6 +172,11 @@ void FancyZonesSettings::LoadSettings()
             m_settings.dockMotionCurve = std::clamp(*val, 0, 1);
         }
 
+        if (auto val = values.get_int_value(NonLocalizable::StageMoveStyleID))
+        {
+            m_settings.stageMoveStyle = std::clamp(*val, 0, 1);
+        }
+
         if (auto val = values.get_bool_value(NonLocalizable::DockAnticipationID))
         {
             m_settings.dockAnticipation = *val;

@@ -123,6 +123,7 @@ struct Settings
     bool dockAnticipation = false; // A small pull back before the move
     bool stageAnimatePromote = false; // Promoting a window out of the Stage strip glides (needs Animations)
     int stagePromoteStyle = 0; // How: 0 grow from the strip tile, 1 crossfade
+    int stageMoveStyle = 0; // How a window moves between docked slots: 0 slide, 1 crossfade
     int stageStripRadius = 12; // Corner radius of the Stage strip tiles in pixels, 0 .. 40
     bool dockMiddleClickExpand = true; // A middle click on a title bar expands its window into the empty space
     bool desktopScrollOverview = false; // Scrolling the desktop zooms out to the pages, and ends on a page

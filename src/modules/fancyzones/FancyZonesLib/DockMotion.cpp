@@ -61,6 +61,8 @@ namespace
         std::array<double, 4> end{};
         int opacity{ 255 }; // 0 to 255
         int drawnOpacity{ -1 };
+        bool ghost{}; // the fade-out half of a crossfaded move: a second sprite of the same window, at its old rect
+        int startOpacity{ 255 }; // ghost: the opacity its fade out starts from (a quick second move starts from a half-faded sprite)
     };
 
     bool IsAnimated(HWND window) noexcept
@@ -219,14 +221,59 @@ struct DockMotion::Impl
             return;
         }
 
-        for (const auto candidate : InZOrder(windows))
+        const auto ordered = InZOrder(windows);
+        std::vector<StageMotion::Spec> specs;
+        for (const auto candidate : ordered)
         {
-            const auto existing = std::find_if(sprites.begin(), sprites.end(), [&](const Sprite& sprite) { return sprite.window == candidate; });
+            specs.push_back(std::find_if(held.begin(), held.end(), [&](const Held& h) { return h.window == candidate; })->spec);
+        }
+
+        // Every ghost (the fade-out half of a crossfaded move) is registered before any new live sprite, so DWM stacks it below them
+        for (const auto& registration : StageMotion::RegistrationOrder(specs))
+        {
+            const auto candidate = ordered[registration.index];
+            const auto& fullSpec = specs[registration.index];
+            const auto existing = std::find_if(sprites.begin(), sprites.end(), [&](const Sprite& sprite) { return sprite.window == candidate && !sprite.ghost; });
             const bool known = existing != sprites.end();
+            if (registration.ghost)
+            {
+                if (!known && !IsAnimated(candidate))
+                {
+                    continue;
+                }
+
+                // A quick second move: the ghost starts where the live sprite is seen now, at its opacity
+                const auto start = StageMotion::GhostStart(fullSpec, known ? std::optional<StageMotion::Look>(StageMotion::Look{ existing->place, existing->opacity }) : std::nullopt);
+                HTHUMBNAIL ghostId{};
+                if (start && SUCCEEDED(DwmRegisterThumbnail(overlay, candidate, &ghostId)))
+                {
+                    // It replaces this window's older ghost; without a new one, an older ghost fades out on its own
+                    std::erase_if(sprites, [&](const Sprite& sprite) {
+                        const bool replaced = sprite.ghost && sprite.window == candidate;
+                        if (replaced)
+                        {
+                            DwmUnregisterThumbnail(sprite.id);
+                        }
+
+                        return replaced;
+                    });
+
+                    Sprite ghost{ .window = candidate, .id = ghostId, .place = start->place };
+                    ghost.kind = StageMotion::Kind::FadeOut;
+                    ghost.ghost = true;
+                    ghost.startOpacity = start->opacity;
+                    ghost.opacity = start->opacity;
+                    sprites.push_back(ghost);
+                }
+
+                continue;
+            }
+
+            const auto parts = StageMotion::FadeThroughParts(fullSpec);
+            const StageMotion::Spec& spec = parts.empty() ? fullSpec : parts[1];
             if (known)
             {
                 // A quick second move of a window that still has a sprite: its spec replaces the old one (no stale target, no fade the wrong way)
-                const auto& spec = std::find_if(held.begin(), held.end(), [&](const Held& h) { return h.window == candidate; })->spec;
                 const bool special = spec.kind != StageMotion::Kind::Travel || spec.from || spec.to;
                 if (special || existing->kind != StageMotion::Kind::Travel || existing->fixedEnd)
                 {
@@ -250,7 +297,6 @@ struct DockMotion::Impl
             HTHUMBNAIL id{};
             if (!known && IsAnimated(candidate) && GetWindowRect(candidate, &rect) && SUCCEEDED(DwmRegisterThumbnail(overlay, candidate, &id)))
             {
-                const auto spec = std::find_if(held.begin(), held.end(), [&](const Held& h) { return h.window == candidate; })->spec;
                 Sprite sprite{ .window = candidate, .id = id, .place = spec.from ? PlaceOf(*spec.from) : PlaceOf(rect) };
                 sprite.kind = spec.kind;
                 sprite.fixedEnd = spec.to.has_value();
@@ -301,7 +347,7 @@ struct DockMotion::Impl
             sprite.started = true;
             sprite.elapsed += seconds;
             const double progress = (std::min)(sprite.elapsed / EaseSeconds, 1.0);
-            sprite.opacity = StageMotion::OpacityByte(sprite.kind, progress);
+            sprite.opacity = sprite.ghost ? StageMotion::GhostOpacityByte(sprite.startOpacity, progress) : StageMotion::OpacityByte(sprite.kind, progress);
             return progress < 1.0;
         }
 
