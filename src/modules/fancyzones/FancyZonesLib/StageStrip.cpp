@@ -311,6 +311,15 @@ struct StageStrip::Impl
             }
 
             return 0;
+        case WM_DPICHANGED:
+            // The corner radius scales with the DPI: rebuild the regions even when the strip's layout stays the same. Posted, since this
+            // arrives inside Apply's SetWindowPos, before the tiles are updated; the suggested rect is ignored (Apply sets the exact one).
+            if (self && self->control)
+            {
+                PostMessageW(self->control, WM_STRIP_RADIUS, 0, 0);
+            }
+
+            return 0;
         case WM_PAINT:
         {
             // No hover highlight: a hovered tile only grows (Place), so the strip stays see-through. The class brush erases what the region shows.
@@ -412,7 +421,8 @@ struct StageStrip::Impl
             r = fit->second; // set by Place, which runs before this wherever the tiles move
         }
 
-        return StageStripMotion::ShapeOf(StageLayouts::LRect(r.left, r.top, r.right, r.bottom), self->radius.load(), false, 0); // no hover ring: the hovered thumbnail just grows
+        return StageStripMotion::ShapeOf(StageLayouts::LRect(r.left, r.top, r.right, r.bottom), StageStripMotion::ScaleRadius(self->radius.load(), s.overlay ? static_cast<int>(GetDpiForWindow(s.overlay)) : 0),
+                                         false, 0); // no hover ring: the hovered thumbnail just grows
     }
 
     static HRGN RoundRegion(const StageLayouts::LRect& r, int radius) noexcept

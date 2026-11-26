@@ -324,6 +324,17 @@ namespace StageStripMotion
         return (std::max)(0, (std::min)(setting, MaxRadiusSetting));
     }
 
+    // The setting is in pixels at 100% scaling; a strip on a scaled monitor gets the same visual roundness
+    inline int ScaleRadius(int radius, int dpi)
+    {
+        if (dpi <= 0)
+        {
+            return radius; // unknown DPI: as set
+        }
+
+        return (radius * dpi + 48) / 96; // rounded to the nearest pixel
+    }
+
     // The corner radius a tile can take
     inline int ClampRadius(int radius, int width, int height)
     {

@@ -180,6 +180,17 @@ namespace StageStripMotionUnitTests
             Assert::AreEqual(40, RadiusOf(40));
         }
 
+        TEST_METHOD(RadiusScalesWithTheMonitorDpi)
+        {
+            Assert::AreEqual(12, ScaleRadius(12, 96), L"100%");
+            Assert::AreEqual(18, ScaleRadius(12, 144), L"150%");
+            Assert::AreEqual(24, ScaleRadius(12, 192), L"200%");
+            Assert::AreEqual(15, ScaleRadius(12, 120), L"125%");
+            Assert::AreEqual(9, ScaleRadius(7, 120), L"125% rounds 8.75 to the nearest pixel");
+            Assert::AreEqual(0, ScaleRadius(0, 192), L"square stays square");
+            Assert::AreEqual(12, ScaleRadius(12, 0), L"unknown DPI: as set");
+        }
+
         TEST_METHOD(HitTestUsesTheDrawnRectDuringAnimation)
         {
             const auto shown = ProjectSlide(Full(6, 3), 1); // tile 101 targets slot 0 (y 0..50)

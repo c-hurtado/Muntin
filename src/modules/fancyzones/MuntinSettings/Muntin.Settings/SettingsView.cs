@@ -368,7 +368,7 @@ internal sealed class SettingsView
             var read = SettingsStore.ReadInt(_properties, def);
             radiusCombo.SelectedIndex = Array.FindIndex(S.RadiusChoices, c => c.Value == read.Value);
             radiusBox.Value = read.Value;
-            radius.Description = Join($"Corners of the strip tiles, {def.Min} to {def.Max} pixels.", read.Odd ? OddNote(read.Raw, read.Value) : null);
+            radius.Description = Join($"Corners of the strip tiles, {def.Min} to {def.Max} pixels at 100% scaling (larger on scaled monitors).", read.Odd ? OddNote(read.Raw, read.Value) : null);
         });
 
         var width = Note("Strip width", "Drag the inner edge of the strip to make it wider or narrower.");
