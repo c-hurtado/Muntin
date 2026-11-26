@@ -49,6 +49,7 @@ namespace
 
     const Choice MotionChoices[] = { { 0, L"Spring" }, { 1, L"Ease" } };
     const Choice PromoteChoices[] = { { 0, L"Grow from the tile" }, { 1, L"Crossfade" } };
+    const Choice MoveChoices[] = { { 0, L"Slide" }, { 1, L"Crossfade" } };
     const Choice RadiusChoices[] = { { 0, L"Square" }, { 6, L"Small" }, { 12, L"Medium" }, { 20, L"Large" }, { 30, L"Round" } };
     const Choice ArrangeChoices[] = { { 0, L"Dock (drag to dock windows)" }, { 1, L"Stage (one main window, the rest in a strip)" } };
     const wchar_t* const StageLayoutNames[] = { L"master", L"stage", L"pair" };
@@ -81,6 +82,7 @@ namespace
         SaveLayoutCommand,
         SpacingCommand,
         LoadLayoutCommand,
+        SettingsCommand,
         ToggleBase = 100,
         PagesBase = 300,
         MotionBase = 400,
@@ -88,6 +90,7 @@ namespace
         StageLayoutBase = 600,
         PromoteBase = 700,
         RadiusBase = 800,
+        MoveBase = 900,
     };
 
     HINSTANCE s_instance{};
@@ -138,6 +141,64 @@ namespace
         {
             Logger::error(L"Startup shortcut {} couldn't be written", path);
         }
+    }
+
+    // The WinUI settings app (src\modules\fancyzones\MuntinSettings): its window class and title, see Program.cs there
+    constexpr wchar_t SettingsWindowClass[] = L"WinUIDesktopWin32WindowClass";
+    constexpr wchar_t SettingsWindowTitle[] = L"Muntin Settings";
+    constexpr wchar_t SettingsExe[] = L"Muntin.Settings.exe";
+
+    // %LOCALAPPDATA%\Muntin\Settings (tools\deploy-settings-app.ps1) first, then next to Muntin.exe
+    void OpenSettings() noexcept
+    {
+        if (const HWND open = FindWindowW(SettingsWindowClass, SettingsWindowTitle))
+        {
+            if (IsIconic(open))
+            {
+                ShowWindow(open, SW_RESTORE);
+            }
+
+            SetForegroundWindow(open);
+            return;
+        }
+
+        wchar_t muntin[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, muntin, ARRAYSIZE(muntin));
+        std::wstring candidates[2];
+        try
+        {
+            candidates[0] = PTSettingsHelper::get_root_save_folder_location() + L"\\Settings\\" + SettingsExe;
+        }
+        catch (...)
+        {
+        }
+
+        const std::wstring_view self{ muntin };
+        if (const auto slash = self.find_last_of(L'\\'); slash != std::wstring_view::npos)
+        {
+            candidates[1] = std::wstring{ self.substr(0, slash + 1) } + SettingsExe;
+        }
+
+        for (const auto& exe : candidates)
+        {
+            if (exe.empty() || GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES)
+            {
+                continue;
+            }
+
+            // The app makes the start at sign-in shortcut to this Muntin.exe
+            const std::wstring parameters = std::wstring{ L"--muntin \"" } + muntin + L"\"";
+            const std::wstring directory = exe.substr(0, exe.find_last_of(L'\\'));
+            if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", exe.c_str(), parameters.c_str(), directory.c_str(), SW_SHOWNORMAL)) <= 32)
+            {
+                Logger::error(L"{} couldn't be started", exe);
+                Tray::Notify(L"Muntin.Settings.exe couldn't be started.");
+            }
+
+            return;
+        }
+
+        Tray::Notify(L"Muntin.Settings.exe was not found in %LOCALAPPDATA%\\Muntin\\Settings or next to Muntin.exe.");
     }
 
     // Read from the file, which the running layouts keep up to date
@@ -873,6 +934,7 @@ namespace
 
         HMENU menu = CreatePopupMenu();
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"Muntin");
+        AppendMenuW(menu, MF_STRING, SettingsCommand, L"Settings...");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         for (size_t i = 0; i < std::size(Toggles); ++i)
         {
@@ -881,6 +943,7 @@ namespace
         }
 
         AppendMenuW(menu, MF_POPUP | (settings.dockAnimation && settings.stageAnimatePromote ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(ChoiceMenu(PromoteChoices, std::size(PromoteChoices), settings.stagePromoteStyle, PromoteBase)), L"Promote animation");
+        AppendMenuW(menu, MF_POPUP | (settings.dockAnimation ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(ChoiceMenu(MoveChoices, std::size(MoveChoices), settings.stageMoveStyle, MoveBase)), L"Move animation");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(ChoiceMenu(RadiusChoices, std::size(RadiusChoices), settings.stageStripRadius, RadiusBase)), L"Strip corner radius");
 
         HMENU arrange = ChoiceMenu(ArrangeChoices, std::size(ArrangeChoices), settings.arrangeMode == 1 ? 1 : 0, ArrangeBase);
@@ -914,7 +977,11 @@ namespace
         DestroyMenu(menu);
 
         bool saved = true;
-        if (command == LoadLayoutCommand)
+        if (command == SettingsCommand)
+        {
+            OpenSettings();
+        }
+        else if (command == LoadLayoutCommand)
         {
             PickLayout();
         }
@@ -937,6 +1004,10 @@ namespace
         else if (command >= PromoteBase && command - PromoteBase < std::size(PromoteChoices))
         {
             saved = FancyZonesSettings::SaveValue(NonLocalizable::StagePromoteStyleID, json::value(PromoteChoices[command - PromoteBase].value));
+        }
+        else if (command >= MoveBase && command - MoveBase < std::size(MoveChoices))
+        {
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::StageMoveStyleID, json::value(MoveChoices[command - MoveBase].value));
         }
         else if (command >= RadiusBase && command - RadiusBase < std::size(RadiusChoices))
         {

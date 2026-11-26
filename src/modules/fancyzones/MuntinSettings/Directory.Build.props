@@ -1,0 +1,12 @@
+<Project>
+  <!-- Isolated from the PowerToys build: this folder does not inherit the repo-level props, targets or central package versions. -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <NuGetAudit>false</NuGetAudit>
+    <SkipLongPathsCheck>true</SkipLongPathsCheck>
+  </PropertyGroup>
+</Project>

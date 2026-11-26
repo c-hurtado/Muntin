@@ -1,0 +1,6 @@
+<Project>
+  <!-- Intentionally empty: versions are set on each PackageReference. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
