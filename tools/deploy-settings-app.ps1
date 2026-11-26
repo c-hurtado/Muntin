@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Publishes Muntin.Settings.exe (the WinUI settings window, framework-dependent: needs .NET 9 Desktop Runtime and
+    Publishes Muntin.Settings.exe (the WinUI settings window, framework-dependent: needs the .NET 9 Runtime and
     Windows App Runtime 2.x >= 2.2) for win-x64 and copies it to
     %LOCALAPPDATA%\Muntin\Settings, where the Muntin tray's "Settings..." item looks first.
 

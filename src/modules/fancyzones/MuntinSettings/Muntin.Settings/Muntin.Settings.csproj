@@ -7,7 +7,7 @@
     <RootNamespace>Muntin.Settings.App</RootNamespace>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
-    <!-- Framework-dependent: uses the installed .NET 9 WindowsDesktop runtime and the Windows App Runtime 2.x framework package.
+    <!-- Framework-dependent: uses the installed .NET 9 runtime (Microsoft.NETCore.App) and the Windows App Runtime 2.x framework package.
          The bootstrapper auto-initializer stays on, so a missing runtime gives the standard install prompt. -->
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <SelfContained>false</SelfContained>
