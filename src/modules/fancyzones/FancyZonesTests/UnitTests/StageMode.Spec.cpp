@@ -332,6 +332,27 @@ namespace FancyZonesUnitTests
             Assert::IsNotNull(StageAdopt::OverlayReason(excluded), L"a held window of an app excluded meanwhile is released");
         }
 
+        TEST_METHOD (StageAdoptSnippingToolIsExcludedByDefault)
+        {
+            Assert::IsTrue(StageAdopt::IsBuiltInExcluded(L"C:\\PROGRAM FILES\\WINDOWSAPPS\\MICROSOFT.SCREENSKETCH_11.2409.25.0_X64__8WEKYB3D8BBWE\\SNIPPINGTOOL\\SNIPPINGTOOL.EXE"));
+            Assert::IsTrue(StageAdopt::IsBuiltInExcluded(L"C:\\x\\SnippingTool.exe"), L"any case");
+            Assert::IsTrue(StageAdopt::IsBuiltInExcluded(L"snippingtool.exe"), L"a bare file name");
+            Assert::IsFalse(StageAdopt::IsBuiltInExcluded(L"C:\\x\\NOTSNIPPINGTOOL.EXE"), L"only the exact file name");
+            Assert::IsFalse(StageAdopt::IsBuiltInExcluded(L"C:\\SNIPPINGTOOL.EXE\\NOTEPAD.EXE"), L"a folder of that name does not count");
+            Assert::IsFalse(StageAdopt::IsBuiltInExcluded(L""));
+
+            // Its main window (XamlWindow "Snipping Tool", style 14cf0000, ex 200100) is otherwise an ordinary eligible window
+            auto snip = Plain();
+            snip.cls = L"XamlWindow";
+            snip.style = 0x14cf0000;
+            snip.exStyle = 0x200100;
+            Assert::IsNull(StageAdopt::SkipReason(snip), L"without the rule it would be adopted");
+            snip.excludedBuiltIn = true;
+            Assert::IsNotNull(StageAdopt::SkipReason(snip), L"never adopted");
+            Assert::IsNotNull(StageAdopt::HardOverlayReason(snip), L"a held one is released, like an app the user excluded");
+            Assert::AreNotEqual(std::wstring(L"excluded by fancyzones_excluded_apps"), std::wstring(StageAdopt::SkipReason(snip)), L"its own log reason");
+        }
+
         TEST_METHOD (FullscreenIsLeftAloneButOverlaysAreReleased)
         {
             auto fullscreen = Plain();

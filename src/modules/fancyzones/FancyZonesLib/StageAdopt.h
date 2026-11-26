@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <set>
 #include <string>
 #include <vector>
@@ -52,6 +53,7 @@ namespace StageAdopt
         bool cutLoose{}; // the stack had no room for it at its minimum size (StageState::MinSizeCut): left floating until room appears
         bool heldElsewhere{}; // parked by the desktop scroll, or arranged by StageProto (Muntin.HandsOff)
         bool excludedByUser{}; // its app is in fancyzones_excluded_apps
+        bool excludedBuiltIn{}; // its app is on the built-in list the stage always leaves alone (IsBuiltInExcluded)
         bool coversMonitor{}; // its visible frame (DWM extended frame bounds) covers its monitor (within a couple of pixels)
         bool zoomed{}; // maximized (IsZoomed)
         bool youngFullSized{}; // not maximized, covers nearly all of a monitor and is only seconds old (YoungFullSized)
@@ -125,12 +127,38 @@ namespace StageAdopt
         return !HasCaption(w.style) && w.coversMonitor && (NoFrame(w.style) || !w.zoomed);
     }
 
-    // What is released and restored when it is held: the user's exclusion, click-through windows, and layered popups without any frame
+    // Apps the stage always leaves alone, as if the user had excluded them (the user's list is not changed). Snipping Tool: its main
+    // window (XamlWindow "Snipping Tool") turns into a small capture bar while a capture runs; adopted, it was stretched into a slot
+    // and left a grey box. processPath: the full path or the file name, any case.
+    inline bool IsBuiltInExcluded(const std::wstring& processPath)
+    {
+        static const wchar_t* const names[] = { L"SNIPPINGTOOL.EXE" };
+        const auto slash = processPath.find_last_of(L"\\/");
+        std::wstring file = slash == std::wstring::npos ? processPath : processPath.substr(slash + 1);
+        for (auto& c : file)
+        {
+            c = static_cast<wchar_t>(towupper(c));
+        }
+
+        for (const auto* name : names)
+        {
+            if (file == name)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // What is released and restored when it is held: the user's exclusion, the built-in exclusions, click-through windows, and layered popups without any frame
     // (WS_EX_LAYERED alone proves nothing: terminals with a translucent background are layered and resizable)
     inline const wchar_t* HardOverlayReason(const AdoptInfo& w)
     {
         if (w.excludedByUser)
             return L"excluded by fancyzones_excluded_apps";
+        if (w.excludedBuiltIn)
+            return L"excluded by default (Snipping Tool: the stage leaves it alone)";
         if ((w.exStyle & WS_EX_TRANSPARENT) != 0)
             return L"overlay (click-through window)";
         if ((w.exStyle & WS_EX_LAYERED) != 0 && NoFrame(w.style))

@@ -26,7 +26,10 @@ public:
         HWND window{};
         StageMotion::Spec spec;
     };
-    void Hold(const std::vector<Held>& windows) noexcept;
+    // Returns the windows whose landing it took (spec.landsAtEnd, and a sprite stands for the window): the caller parks those out of
+    // sight instead of moving them, and DockMotion moves each to its spec.to when its sprite has come to rest. Any other window: the
+    // caller moves it as always.
+    std::vector<HWND> Hold(const std::vector<Held>& windows) noexcept;
 
     // The windows have moved: their thumbnails set off. moved false: nothing changed.
     void Release(bool moved) noexcept;

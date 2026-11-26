@@ -669,7 +669,7 @@ FancyZones::Run() noexcept
         // m_stageMode is reset before m_dockMotion (Destroy), so the pointer outlives the hooks
         m_stageMode->SetMotion({ [motion = m_dockMotion.get()](const std::vector<HWND>& windows) { motion->Hold(windows); },
                                  [motion = m_dockMotion.get()](bool moved) { motion->Release(moved); },
-                                 [motion = m_dockMotion.get()](const std::vector<DockMotion::Held>& windows) { motion->Hold(windows); } });
+                                 [motion = m_dockMotion.get()](const std::vector<DockMotion::Held>& windows) { return motion->Hold(windows); } });
     }
 
     m_desktopScroll = std::make_unique<DesktopScroll>(m_hinstance, [window = m_window](HMONITOR monitor, int page) {

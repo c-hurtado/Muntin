@@ -63,7 +63,63 @@ namespace
         int drawnOpacity{ -1 };
         bool ghost{}; // the fade-out half of a crossfaded move: a second sprite of the same window, at its old rect
         int startOpacity{ 255 }; // ghost: the opacity its fade out starts from (a quick second move starts from a half-faded sprite)
+        bool landsAtEnd{}; // the real window waits out of sight: moved to `end` once the sprite is at rest, the sprite goes once it is there
+        std::array<double, 4> waitsAt{}; // landsAtEnd: where the stage parked the window to wait (it is only landed from there)
+        std::array<double, 4> droppedAt{}; // landsAtEnd: where it was when held (the stage's async move to waitsAt may not have arrived yet)
+        ULONGLONG landSent{}; // when it was sent to `end` (0: not yet)
+        bool landSeen{}; // seen at `end`: one more frame, so the window is drawn there before its sprite goes
     };
+
+    bool SameRect(const RECT& rect, const std::array<double, 4>& place) noexcept
+    {
+        return rect.left == std::lround(place[0]) && rect.top == std::lround(place[1]) && rect.right == std::lround(place[2]) && rect.bottom == std::lround(place[3]);
+    }
+
+    // A sprite at rest whose real window waits out of sight (landsAtEnd): moves the window to the sprite's end, and says whether the sprite
+    // may go. StageMotion::LandStep decides: a window that is no longer where the stage left it to wait (the stage or the user placed it
+    // since, or the stage let it go) is not moved.
+    bool LandAtEnd(Sprite& sprite) noexcept
+    {
+        StageMotion::LandFacts facts;
+        facts.window = IsWindow(sprite.window) != FALSE;
+        if (facts.window)
+        {
+            RECT rect{};
+            const bool known = GetWindowRect(sprite.window, &rect) != FALSE;
+            facts.sent = sprite.landSent != 0;
+            facts.seen = sprite.landSeen;
+            facts.rectIsEnd = known && SameRect(rect, sprite.end);
+            facts.rectIsWaitsAt = known && SameRect(rect, sprite.waitsAt);
+            facts.rectIsFrom = known && SameRect(rect, sprite.droppedAt);
+            facts.iconic = IsIconic(sprite.window) != FALSE;
+            facts.zoomed = IsZoomed(sprite.window) != FALSE;
+            facts.held = Stage::IsHeld(sprite.window);
+            facts.sinceSentMs = facts.sent ? GetTickCount64() - sprite.landSent : 0;
+        }
+
+        switch (StageMotion::LandStep(facts))
+        {
+        case StageMotion::Landing::Send:
+        {
+            sprite.landSent = (std::max)(GetTickCount64(), 1ULL);
+            const auto& e = sprite.end;
+            // Async: a window that hangs must not hang the glide. No z-order change: it is where the stage left it.
+            SetWindowPos(sprite.window, nullptr, std::lround(e[0]), std::lround(e[1]), std::lround(e[2] - e[0]), std::lround(e[3] - e[1]), SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+            return false;
+        }
+        case StageMotion::Landing::Seen:
+            sprite.landSeen = true;
+            return false; // drawn at its place in the next frame (the loop flushes), the sprite goes after that
+        case StageMotion::Landing::Wait:
+            return false;
+        case StageMotion::Landing::Abandon:
+            Logger::info(L"DockMotion: hwnd={:x} was placed elsewhere during its glide: not landed", reinterpret_cast<uintptr_t>(sprite.window));
+            return true;
+        case StageMotion::Landing::Done:
+        default:
+            return true;
+        }
+    }
 
     bool IsAnimated(HWND window) noexcept
     {
@@ -179,7 +235,7 @@ struct DockMotion::Impl
         switch (message)
         {
         case WM_MOTION_HOLD:
-            self->HoldWindows(*reinterpret_cast<const std::vector<Held>*>(lparam));
+            self->HoldWindows(*reinterpret_cast<const std::vector<Held>*>(lparam), reinterpret_cast<std::vector<HWND>*>(wparam));
             return 0;
         case WM_MOTION_RELEASE:
             self->holds = (std::max)(self->holds - 1, 0);
@@ -200,7 +256,8 @@ struct DockMotion::Impl
         }
     }
 
-    void HoldWindows(const std::vector<Held>& held) noexcept
+    // taken (may be null): the windows whose landing this hold took (landsAtEnd with a sprite)
+    void HoldWindows(const std::vector<Held>& held, std::vector<HWND>* taken) noexcept
     {
         std::vector<HWND> windows;
         for (const auto& h : held)
@@ -291,6 +348,17 @@ struct DockMotion::Impl
                     existing->elapsed = 0;
                     existing->pullBack = false;
                 }
+
+                // A new move of a window that waits out of sight: the new spec says who lands it now (a plain move: the caller does)
+                existing->landsAtEnd = spec.landsAtEnd && spec.to && spec.from && spec.waitsAt && spec.kind == StageMotion::Kind::Travel;
+                existing->waitsAt = spec.waitsAt ? PlaceOf(*spec.waitsAt) : std::array<double, 4>{};
+                existing->droppedAt = spec.from ? PlaceOf(*spec.from) : std::array<double, 4>{};
+                existing->landSent = 0;
+                existing->landSeen = false;
+                if (existing->landsAtEnd && taken)
+                {
+                    taken->push_back(candidate);
+                }
             }
 
             RECT rect{};
@@ -302,7 +370,14 @@ struct DockMotion::Impl
                 sprite.fixedEnd = spec.to.has_value();
                 sprite.end = spec.to ? PlaceOf(*spec.to) : sprite.end;
                 sprite.opacity = StageMotion::OpacityByte(spec.kind, 0); // a fade in starts invisible: not a frame of it before the first step
+                sprite.landsAtEnd = spec.landsAtEnd && spec.to && spec.from && spec.waitsAt && spec.kind == StageMotion::Kind::Travel;
+                sprite.waitsAt = spec.waitsAt ? PlaceOf(*spec.waitsAt) : std::array<double, 4>{};
+                sprite.droppedAt = spec.from ? PlaceOf(*spec.from) : std::array<double, 4>{};
                 sprites.push_back(sprite);
+                if (sprite.landsAtEnd && taken)
+                {
+                    taken->push_back(candidate);
+                }
             }
         }
 
@@ -457,7 +532,7 @@ struct DockMotion::Impl
             {
                 const bool landed = GetTickCount64() - releasedAt >= LandMillis;
                 std::erase_if(sprites, [&](Sprite& sprite) {
-                    const bool done = !Step(sprite, seconds) && landed;
+                    const bool done = !Step(sprite, seconds) && landed && (!sprite.landsAtEnd || LandAtEnd(sprite));
                     if (done)
                     {
                         DwmUnregisterThumbnail(sprite.id);
@@ -509,13 +584,25 @@ DockMotion::~DockMotion()
     m_impl->thread.join();
 }
 
-void DockMotion::Hold(const std::vector<Held>& windows) noexcept
+std::vector<HWND> DockMotion::Hold(const std::vector<Held>& windows) noexcept
 {
+    std::vector<HWND> taken;
     if (m_impl->window)
     {
         // Not posted: the windows must not move before this returns
-        SendMessageW(m_impl->window, WM_MOTION_HOLD, 0, reinterpret_cast<LPARAM>(&windows));
+        try
+        {
+            taken.reserve(windows.size()); // no allocation on the motion thread can throw then
+        }
+        catch (...)
+        {
+            return {};
+        }
+
+        SendMessageW(m_impl->window, WM_MOTION_HOLD, reinterpret_cast<WPARAM>(&taken), reinterpret_cast<LPARAM>(&windows));
     }
+
+    return taken;
 }
 
 void DockMotion::Hold(const std::vector<HWND>& windows) noexcept

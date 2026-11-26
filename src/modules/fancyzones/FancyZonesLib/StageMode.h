@@ -77,7 +77,8 @@ public:
     {
         std::function<void(const std::vector<HWND>&)> hold;
         std::function<void(bool)> release;
-        std::function<void(const std::vector<DockMotion::Held>&)> holdSpecs; // hold with explicit start/end rects or a fade per window
+        // hold with explicit start/end rects or a fade per window; returns the windows whose landing the motion took (DockMotion::Hold)
+        std::function<std::vector<HWND>(const std::vector<DockMotion::Held>&)> holdSpecs;
     };
     void SetMotion(MotionHooks hooks) noexcept { m_motion = std::move(hooks); }
 
@@ -210,6 +211,9 @@ private:
     UINT_PTR m_dragTimerId{};
     std::optional<Drag> m_drag;
     MotionHooks m_motion;
+    std::set<int> m_landOutOfSight; // a drop is being landed: these windows wait out of sight while their sprites glide (StageMouse::OutOfSightLanders)
+    int m_rehomeDropId{}; // dropped on another monitor: the rehome that follows lands it out of sight (StageMouse::RehomeLandsOutOfSight)
+    unsigned long long m_rehomeDropAt{};
     int m_clickedId{}; // a strip tile click is being landed: the window and the tile it was clicked in (as the strip showed it), where its promote glide starts
     StageLayouts::LRect m_clickedTile;
     bool m_areaChanging{}; // set during the relayout timer's LandAll: it also suppresses glides for the unmaximize-wait and monitor-key-retry relayouts

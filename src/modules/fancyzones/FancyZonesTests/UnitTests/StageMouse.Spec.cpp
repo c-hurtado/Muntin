@@ -525,6 +525,27 @@ namespace StageMouseTests
             Assert::IsFalse(plan.skipDragged);
         }
 
+        TEST_METHOD(DroppedWindowsThatGlideIntoUncoveredSlotsLandOutOfSight)
+        {
+            using StageMouse::Drop;
+            using StageMouse::OutOfSightLanders;
+            Assert::IsTrue(OutOfSightLanders(Drop::SnapBack, 4, 0) == std::vector<int>{ 4 }, L"back into its emptied slot");
+            Assert::IsTrue(OutOfSightLanders(Drop::Swap, 4, 7) == std::vector<int>{ 4, 7 }, L"both: each lands where the other's sprite leaves or nothing is");
+            Assert::IsTrue(OutOfSightLanders(Drop::Rehome, 4, 0).empty(), L"the rehome lands it later");
+            Assert::IsTrue(OutOfSightLanders(Drop::ResizeEdge, 4, 0).empty(), L"a resize does not travel");
+            Assert::IsTrue(OutOfSightLanders(Drop::Unmaximize, 4, 0).empty(), L"restored first, placed later");
+        }
+
+        TEST_METHOD(ARehomeRightAfterADropLandsTheDroppedWindowOutOfSight)
+        {
+            using StageMouse::RehomeLandsOutOfSight;
+            Assert::IsTrue(RehomeLandsOutOfSight(4, 4, 1300, 1000), L"the debounced rehome of the drop");
+            Assert::IsFalse(RehomeLandsOutOfSight(5, 4, 1300, 1000), L"another window");
+            Assert::IsFalse(RehomeLandsOutOfSight(4, 4, 1000 + StageMouse::RehomeDropMillis, 1000), L"long after: a move of its own");
+            Assert::IsFalse(RehomeLandsOutOfSight(4, 0, 1300, 1000), L"no drop pending");
+            Assert::IsFalse(RehomeLandsOutOfSight(0, 0, 1300, 1000));
+        }
+
         TEST_METHOD(DropPlanCrossMonitorRehomesAndLandsWithoutTheDraggedWindow)
         {
             using StageMouse::Drop;

@@ -153,6 +153,10 @@ namespace StageMotion
         Kind kind{ Kind::Travel };
         std::optional<StageLayouts::LRect> from; // explicit start rect (screen pixels, the window's outer rect), else the window's own
         std::optional<StageLayouts::LRect> to; // explicit end rect, else the window's real rect
+        // The real window waits out of sight (parked as a sliver) while the sprite travels, and DockMotion moves it to `to` once the sprite
+        // has come to rest: nothing of the window shows under its own sprite. Only a Travel with `from`, `to` and `waitsAt` (see DroppedSpec).
+        bool landsAtEnd{};
+        std::optional<StageLayouts::LRect> waitsAt; // landsAtEnd: where the window waits (its sliver); it is only landed from there (LandStep)
     };
 
     // The outer rect of a window (with its invisible frame) as the strip draws it in a tile: the visible part (outer minus `insets`, left top right
@@ -289,6 +293,82 @@ namespace StageMotion
         }
 
         return spec;
+    }
+
+    // The sprite of a window a drop lands in a slot no other sprite covers (StageMouse::OutOfSightLanders: a snap back, both windows of a
+    // swap, a drop on another monitor). Its real window cannot land in the slot at once: it would show there under its own sprite for the
+    // whole glide (the "copy underneath" of a lone window dropped back into a full-screen slot). Slide: the window waits out of sight and
+    // lands at the end of the glide (landsAtEnd), when it can wait out of sight (waitsAt: a free sliver of its monitor). It waits at the
+    // size it has (never resized off screen, where an app may not paint and its sprite would show nothing): a slot of another size (another
+    // monitor, the other slot of a swap) is reached by the landing move itself, on screen. Otherwise the move of MovedSpec.
+    inline Spec DroppedSpec(MoveStyle style, const StageLayouts::LRect& oldRect, const StageLayouts::LRect& newRect, const std::optional<StageLayouts::LRect>& waitsAt)
+    {
+        if (style != MoveStyle::Slide || !waitsAt || oldRect.W() <= 0 || oldRect.H() <= 0 || newRect.W() <= 0 || newRect.H() <= 0 || oldRect.Same(newRect))
+        {
+            return MovedSpec(style, oldRect, newRect);
+        }
+
+        Spec spec;
+        spec.from = oldRect;
+        spec.to = newRect;
+        spec.landsAtEnd = true;
+        spec.waitsAt = waitsAt;
+        return spec;
+    }
+
+    // A landsAtEnd sprite at rest: what DockMotion does next with its real window (one step per frame)
+    enum class Landing
+    {
+        Send, // move the window to the sprite's end now
+        Wait, // sent, not there yet: keep the sprite
+        Seen, // there now: keep the sprite one more frame, so the window is drawn in its place before the sprite goes
+        Done, // the sprite goes (landed, gone, or too slow)
+        Abandon // the sprite goes and the window is NOT moved: something else placed it meanwhile
+    };
+
+    constexpr unsigned long long LandTimeoutMillis = 500; // sent and not seen at its end by then: the sprite goes anyway
+
+    struct LandFacts
+    {
+        bool window{ true }; // the window still exists
+        bool sent{}; // the move to the end was sent already
+        bool seen{}; // ... and the window was seen at the end
+        bool rectIsEnd{}; // its rect now is the sprite's end
+        bool rectIsWaitsAt{}; // its rect now is where the stage parked it to wait
+        bool rectIsFrom{}; // its rect now is still where it was dropped: the stage's async move to the sliver has not arrived yet (it would after ours: queued in order)
+        bool iconic{};
+        bool zoomed{};
+        bool held{ true }; // the stage still holds it (Stage::IsHeld)
+        unsigned long long sinceSentMs{};
+    };
+
+    // Before the move: the window is landed only from where the stage left it to wait, still held, not minimized or maximized. Anywhere else
+    // the stage (a drag preview, a monitor change), the user (minimize, maximize, a new drag) or a release placed it after the hold: a stale
+    // sprite must not move it back.
+    constexpr Landing LandStep(const LandFacts& f)
+    {
+        if (!f.window)
+        {
+            return Landing::Done;
+        }
+
+        if (!f.sent)
+        {
+            const bool waiting = f.rectIsWaitsAt || f.rectIsFrom;
+            return f.held && !f.iconic && !f.zoomed && waiting ? Landing::Send : Landing::Abandon;
+        }
+
+        if (f.seen)
+        {
+            return Landing::Done;
+        }
+
+        if (f.rectIsEnd)
+        {
+            return Landing::Seen;
+        }
+
+        return f.sinceSentMs >= LandTimeoutMillis ? Landing::Done : Landing::Wait;
     }
 
     // The two sprites a FadeThrough spec stands for: [0] fades out at the old rect, [1] fades in at the new one. Other kinds: nothing.

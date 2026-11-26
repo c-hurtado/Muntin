@@ -661,6 +661,7 @@ StageAdopt::AdoptInfo StageMode::Describe(HWND window)
     std::wstring processPath = get_process_path(window);
     CharUpperBuffW(processPath.data(), static_cast<DWORD>(processPath.length()));
     info.excludedByUser = !processPath.empty() && FancyZonesWindowUtils::IsExcludedByUser(window, processPath);
+    info.excludedBuiltIn = StageAdopt::IsBuiltInExcluded(processPath);
     info.cutLoose = m_loose.contains(window);
     info.stuckMaximized = m_stuck.contains(window);
     if (info.stuckMaximized && !StageState::StillStuck(true, IsZoomed(window) != FALSE))
@@ -922,6 +923,7 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         StageMotion::Candidate facts;
         std::optional<Rect> tile; // wasParked: its strip tile (as an outer rect), when known
         Rect oldRect; // where it is now (outer)
+        std::optional<Rect> outOfSight; // the dropped window of a snap back: the sliver it waits in while its sprite glides (DroppedSpec)
     };
     std::vector<DockedMove> dockedMoves;
 
@@ -1048,6 +1050,16 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
             move.facts.fullscreen = m.fullscreen;
             move.facts.changesMonitor = MonitorFromWindow(m.window, MONITOR_DEFAULTTONEAREST) != stage.monitor.handle;
             move.facts.visible = IsWindowVisible(m.window) != FALSE;
+            if (m_landOutOfSight.contains(m.id) && !m.parked && move.facts.moves)
+            {
+                // Parked as a sliver at its size (a window resized off screen may not paint), as Park would park it from where it was dropped
+                const auto sliver = StagePark::Park(move.oldRect, move.outer, stage.monitor.rect, monitors);
+                if (sliver.sliver)
+                {
+                    move.outOfSight = sliver.outer;
+                }
+            }
+
             dockedMoves.push_back(move);
         }
         else if (dialogs.contains(m.window))
@@ -1144,6 +1156,10 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
                     promoteGlides = true;
                     spec = StageMotion::PromotedSpec(promoteStyle, move.tile, move.outer);
                 }
+                else if (m_landOutOfSight.contains(move.window->id))
+                {
+                    spec = StageMotion::DroppedSpec(moveStyle, move.oldRect, move.outer, move.outOfSight);
+                }
                 else
                 {
                     spec = StageMotion::MovedSpec(moveStyle, move.oldRect, move.outer); // Slide: the default travel
@@ -1172,9 +1188,10 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         }
 
         StageMotion::ScopeGuard releaseGuard; // minimized and maximized windows never get here (the loop above skipped them)
+        std::vector<HWND> landedByMotion; // waiting out of sight: DockMotion moves them into their slots when their sprites are at rest
         if (!held.empty())
         {
-            m_motion.holdSpecs(held); // Not before: the sprites start from where the windows are now
+            landedByMotion = m_motion.holdSpecs(held); // Not before: the sprites start from where the windows are now
             releaseGuard.onExit = [&] { m_motion.release(true); };
         }
 
@@ -1183,7 +1200,8 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         for (const auto& move : dockedMoves)
         {
             auto& m = *move.window;
-            MoveTo(m.window, move.outer, false, stage.monitor.handle);
+            const bool outOfSight = move.outOfSight && std::find(landedByMotion.begin(), landedByMotion.end(), m.window) != landedByMotion.end();
+            MoveTo(m.window, outOfSight ? *move.outOfSight : move.outer, false, stage.monitor.handle);
             if (move.wasParked)
             {
                 SetWindowPos(m.window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS); // Back from behind everything
@@ -1940,6 +1958,24 @@ void StageMode::Rehome(int id, MonitorStage& from, MonitorStage& to)
     Logger::info(L"Stage: rehome hwnd={:x} class={} from monitor {} to monitor {}: {}", reinterpret_cast<uintptr_t>(m.window), ClassOf(m.window), MonitorIndex(from.monitor.rect),
                  MonitorIndex(to.monitor.rect), wasDocked ? L"docked there" : L"behind the docked windows there");
     Land(from);
+    // Dropped there by a drag: it glides from where it was dropped into its slot while it waits out of sight on this monitor
+    const bool dropped = StageMouse::RehomeLandsOutOfSight(id, m_rehomeDropId, GetTickCount64(), m_rehomeDropAt);
+    if (id == m_rehomeDropId)
+    {
+        m_rehomeDropId = 0;
+    }
+
+    if (dropped)
+    {
+        m_landOutOfSight.insert(id);
+    }
+
+    StageMotion::ScopeGuard landed([this, dropped, id] {
+        if (dropped)
+        {
+            m_landOutOfSight.erase(id);
+        }
+    });
     Land(to);
 }
 
@@ -2298,6 +2334,18 @@ void StageMode::DragEnd(HWND window) noexcept
             m->grace = GetTickCount64() + GraceMillis; // Our moves below are not a minimum size
         }
 
+        // The windows that glide into slots nothing covers wait out of sight meanwhile (else each shows in its slot under its own sprite)
+        for (const int id : StageMouse::OutOfSightLanders(plan.action, drag.id, facts.targetId))
+        {
+            m_landOutOfSight.insert(id);
+            if (const auto it = m_windows.find(id); it != m_windows.end())
+            {
+                // A swap target waits out of sight at its old size too: a slow landing must not be learned as its minimum
+                it->second.grace = GetTickCount64() + GraceMillis;
+            }
+        }
+
+        StageMotion::ScopeGuard landed([this] { m_landOutOfSight.clear(); });
         switch (plan.action)
         {
         case StageMouse::Drop::ResizeEdge:
@@ -2315,6 +2363,8 @@ void StageMode::DragEnd(HWND window) noexcept
             break;
         case StageMouse::Drop::Rehome:
             m->grace = 0; // The rehome scan must not wait for a grace of ours
+            m_rehomeDropId = drag.id; // the rehome lands it out of sight on the other monitor
+            m_rehomeDropAt = GetTickCount64();
             Land(*stage, plan.skipDragged ? drag.id : 0); // The previewed neighbours go back; the window itself is the rehome's
             ArmRehome();
             break;

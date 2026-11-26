@@ -327,4 +327,30 @@ namespace StageMouse
 
         return { f.targetId != 0 ? Drop::Swap : Drop::SnapBack, false };
     }
+
+    // The windows a drop's own landing glides into slots that no other sprite covers: each waits out of sight while its sprite glides
+    // (StageMotion::DroppedSpec), else it shows in its new slot under its own sprite. SnapBack: the dragged window back into its emptied
+    // slot. Swap: the dragged window into the target's slot (the target's sprite leaves it) and the target into the dragged window's emptied
+    // slot. Rehome: none here, the rehome lands the dragged window later (RehomeLandsOutOfSight). A resize or an unmaximize does not travel.
+    inline std::vector<int> OutOfSightLanders(Drop action, int draggedId, int targetId)
+    {
+        switch (action)
+        {
+        case Drop::SnapBack:
+            return { draggedId };
+        case Drop::Swap:
+            return targetId != 0 ? std::vector<int>{ draggedId, targetId } : std::vector<int>{ draggedId };
+        default:
+            return {};
+        }
+    }
+
+    // A drop on another monitor is landed by the rehome that follows (debounced): it waits out of sight when that rehome comes soon enough to
+    // still be the drop's (a later rehome of the same window is a move of its own)
+    constexpr unsigned long long RehomeDropMillis = 5000;
+
+    constexpr bool RehomeLandsOutOfSight(int id, int droppedId, unsigned long long now, unsigned long long droppedAt)
+    {
+        return id != 0 && id == droppedId && now >= droppedAt && now - droppedAt < RehomeDropMillis;
+    }
 }

@@ -265,6 +265,90 @@ namespace StageMotionUnitTests
             Assert::AreEqual(OpacityByte(parts[0].kind, 0.25), 255 - OpacityByte(parts[1].kind, 0.25), L"complementary");
         }
 
+        TEST_METHOD(ADroppedWindowWaitsOutOfSightWhileItsSpriteSlidesBack)
+        {
+            // A lone window dragged off its full-screen slot and dropped: only the sprite may show during the glide back
+            const StageLayouts::LRect dropped(300, 200, 2860, 1580), slot(0, 0, 2560, 1380);
+            const StageLayouts::LRect sliver(300, 1439, 2860, 2819);
+            const auto spec = DroppedSpec(MoveStyle::Slide, dropped, slot, sliver);
+            Assert::IsTrue(spec.kind == Kind::Travel);
+            Assert::IsTrue(spec.landsAtEnd, L"the real window lands when the sprite is at rest, not at once under it");
+            Assert::IsTrue(spec.from.has_value() && spec.from->Same(dropped), L"from where it was dropped");
+            Assert::IsTrue(spec.to.has_value() && spec.to->Same(slot), L"to its slot, not to where the waiting window is");
+            Assert::IsTrue(spec.waitsAt.has_value() && spec.waitsAt->Same(sliver), L"where it waits: only landed from there");
+            Assert::IsTrue(FadeThroughParts(spec).empty());
+        }
+
+        TEST_METHOD(ADroppedWindowLandsAtOnceWhenItCannotWaitOutOfSight)
+        {
+            const StageLayouts::LRect dropped(300, 200, 2860, 1580), slot(0, 0, 2560, 1380);
+            const std::optional<StageLayouts::LRect> sliver = StageLayouts::LRect(300, 1439, 2860, 2819);
+            Assert::IsFalse(DroppedSpec(MoveStyle::Slide, dropped, slot, std::nullopt).landsAtEnd, L"no free sliver: the plain move");
+            const StageLayouts::LRect smaller(300, 200, 2000, 1000);
+            const auto other = DroppedSpec(MoveStyle::Slide, smaller, slot, StageLayouts::LRect(300, 1439, 2000, 2239));
+            Assert::IsTrue(other.landsAtEnd, L"a slot of another size (another monitor, a swap): waits at its own size, the landing move resizes it on screen");
+            Assert::IsTrue(other.from->Same(smaller) && other.to->Same(slot));
+            Assert::IsFalse(DroppedSpec(MoveStyle::Slide, dropped, StageLayouts::LRect(0, 0, 0, 0), sliver).landsAtEnd, L"no slot");
+            Assert::IsFalse(DroppedSpec(MoveStyle::Slide, slot, slot, sliver).landsAtEnd, L"already in its slot: nothing travels");
+            Assert::IsFalse(DroppedSpec(MoveStyle::Slide, StageLayouts::LRect(0, 0, 0, 0), slot, sliver).landsAtEnd, L"unknown old rect");
+            const auto fade = DroppedSpec(MoveStyle::Crossfade, dropped, slot, sliver);
+            Assert::IsFalse(fade.landsAtEnd, L"a crossfade fades in over the real window at its slot");
+            Assert::IsTrue(fade.kind == Kind::FadeThrough, L"the crossfade of MovedSpec");
+            Assert::IsFalse(MovedSpec(MoveStyle::Slide, dropped, slot).landsAtEnd, L"other moves are covered by the sprites of the windows they swap with");
+        }
+
+        static constexpr LandFacts Waiting()
+        {
+            LandFacts f;
+            f.rectIsWaitsAt = true;
+            return f;
+        }
+
+        TEST_METHOD(AWaitingWindowIsLandedThenSeenThenItsSpriteGoes)
+        {
+            Assert::IsTrue(LandStep(Waiting()) == Landing::Send, L"at rest, the window still waits where the stage left it: moved to its slot");
+            auto dropped = LandFacts{};
+            dropped.rectIsFrom = true;
+            Assert::IsTrue(LandStep(dropped) == Landing::Send, L"the stage's async move to the sliver has not arrived yet: ours is queued after it");
+
+            auto sent = LandFacts{};
+            sent.sent = true;
+            sent.sinceSentMs = 50;
+            Assert::IsTrue(LandStep(sent) == Landing::Wait, L"not there yet: the sprite stays");
+            sent.rectIsEnd = true;
+            Assert::IsTrue(LandStep(sent) == Landing::Seen, L"there: one more frame with the sprite");
+            sent.seen = true;
+            Assert::IsTrue(LandStep(sent) == Landing::Done);
+
+            auto slow = LandFacts{};
+            slow.sent = true;
+            slow.sinceSentMs = LandTimeoutMillis;
+            Assert::IsTrue(LandStep(slow) == Landing::Done, L"too slow: the sprite goes anyway");
+            auto gone = Waiting();
+            gone.window = false;
+            Assert::IsTrue(LandStep(gone) == Landing::Done, L"closed: nothing to land");
+        }
+
+        TEST_METHOD(AStaleLandingNeverMovesAWindowPlacedElsewhere)
+        {
+            auto moved = Waiting();
+            moved.rectIsWaitsAt = false;
+            Assert::IsTrue(LandStep(moved) == Landing::Abandon, L"the stage placed it meanwhile (a drag preview, a monitor unplugged): not pulled back");
+            auto minimized = Waiting();
+            minimized.iconic = true;
+            Assert::IsTrue(LandStep(minimized) == Landing::Abandon, L"minimized mid-glide");
+            auto maximized = Waiting();
+            maximized.zoomed = true;
+            Assert::IsTrue(LandStep(maximized) == Landing::Abandon, L"maximized mid-glide");
+            auto released = Waiting();
+            released.held = false;
+            Assert::IsTrue(LandStep(released) == Landing::Abandon, L"the stage let it go (left, released): whoever let it go placed it");
+            auto atEnd = Waiting();
+            atEnd.rectIsWaitsAt = false;
+            atEnd.rectIsEnd = true;
+            Assert::IsTrue(LandStep(atEnd) == Landing::Abandon, L"already in its slot (the stage put it there): no second move");
+        }
+
         TEST_METHOD(ACrossfadeWithoutAKnownOldRectSlidesInstead)
         {
             const StageLayouts::LRect now(500, 0, 1000, 800), none(0, 0, 0, 0);
