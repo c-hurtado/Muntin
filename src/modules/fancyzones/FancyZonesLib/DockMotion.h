@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 
+#include <FancyZonesLib/StageMotion.h>
+
 // Docked windows spring to their new places. The real windows move at once and take the mouse there, while
 // live DWM thumbnails over them travel from the old places to the new ones. A move during a move keeps the
 // speed of the windows, so quick moves glide as one. With the ease curve a new target continues from where
@@ -16,6 +18,15 @@ public:
 
     // Holds these windows on the screen as they are. Back after a few frames, when it is safe to move them.
     void Hold(const std::vector<HWND>& windows) noexcept;
+
+    // A window to hold and what its sprite does: spec.from/to override the window's own rects (a sprite that starts or ends somewhere the
+    // real window is not, as a strip tile), spec.kind fades it in or out in place instead of moving it.
+    struct Held
+    {
+        HWND window{};
+        StageMotion::Spec spec;
+    };
+    void Hold(const std::vector<Held>& windows) noexcept;
 
     // The windows have moved: their thumbnails set off. moved false: nothing changed.
     void Release(bool moved) noexcept;

@@ -37,6 +37,7 @@ namespace
         { NonLocalizable::DockMiddleClickExpandID, L"Middle click on a title bar expands the window", &Settings::dockMiddleClickExpand },
         { NonLocalizable::DockAnimationID, L"Animations", &Settings::dockAnimation },
         { NonLocalizable::DockAnticipationID, L"Pull back slightly before a move", &Settings::dockAnticipation },
+        { NonLocalizable::StageAnimatePromoteID, L"Animate promoting from the strip", &Settings::stageAnimatePromote },
         { NonLocalizable::DesktopScrollOverviewID, L"Zoom out while scrolling the desktop", &Settings::desktopScrollOverview },
     };
 
@@ -47,6 +48,7 @@ namespace
     };
 
     const Choice MotionChoices[] = { { 0, L"Spring" }, { 1, L"Ease" } };
+    const Choice PromoteChoices[] = { { 0, L"Grow from the tile" }, { 1, L"Crossfade" } };
     const Choice ArrangeChoices[] = { { 0, L"Dock (drag to dock windows)" }, { 1, L"Stage (one main window, the rest in a strip)" } };
     const wchar_t* const StageLayoutNames[] = { L"master", L"stage", L"pair" };
     const wchar_t* const StageLayoutLabels[] = { L"Master and stack", L"Stage with strip", L"Pair with strip" };
@@ -83,6 +85,7 @@ namespace
         MotionBase = 400,
         ArrangeBase = 500,
         StageLayoutBase = 600,
+        PromoteBase = 700,
     };
 
     HINSTANCE s_instance{};
@@ -871,9 +874,11 @@ namespace
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         for (size_t i = 0; i < std::size(Toggles); ++i)
         {
-            const bool idle = Toggles[i].id == NonLocalizable::DockAnticipationID && !settings.dockAnimation; // Nothing moves without animations
+            const bool idle = (Toggles[i].id == NonLocalizable::DockAnticipationID || Toggles[i].id == NonLocalizable::StageAnimatePromoteID) && !settings.dockAnimation; // Nothing moves without animations
             AppendMenuW(menu, MF_STRING | (settings.*Toggles[i].value ? MF_CHECKED : 0) | (idle ? MF_GRAYED : 0), static_cast<UINT_PTR>(ToggleBase) + i, Toggles[i].label);
         }
+
+        AppendMenuW(menu, MF_POPUP | (settings.dockAnimation && settings.stageAnimatePromote ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(ChoiceMenu(PromoteChoices, std::size(PromoteChoices), settings.stagePromoteStyle, PromoteBase)), L"Promote animation");
 
         HMENU arrange = ChoiceMenu(ArrangeChoices, std::size(ArrangeChoices), settings.arrangeMode == 1 ? 1 : 0, ArrangeBase);
         AppendMenuW(arrange, MF_SEPARATOR, 0, nullptr);
@@ -925,6 +930,10 @@ namespace
         else if (command >= MotionBase && command - MotionBase < std::size(MotionChoices))
         {
             saved = FancyZonesSettings::SaveValue(NonLocalizable::DockMotionCurveID, json::value(MotionChoices[command - MotionBase].value));
+        }
+        else if (command >= PromoteBase && command - PromoteBase < std::size(PromoteChoices))
+        {
+            saved = FancyZonesSettings::SaveValue(NonLocalizable::StagePromoteStyleID, json::value(PromoteChoices[command - PromoteBase].value));
         }
         else if (command >= PagesBase && command - PagesBase < std::size(PageChoices))
         {

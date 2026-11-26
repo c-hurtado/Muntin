@@ -177,6 +177,16 @@ void FancyZonesSettings::LoadSettings()
             m_settings.dockAnticipation = *val;
         }
 
+        if (auto val = values.get_bool_value(NonLocalizable::StageAnimatePromoteID))
+        {
+            m_settings.stageAnimatePromote = *val;
+        }
+
+        if (auto val = values.get_int_value(NonLocalizable::StagePromoteStyleID))
+        {
+            m_settings.stagePromoteStyle = std::clamp(*val, 0, 1);
+        }
+
         if (auto val = values.get_bool_value(NonLocalizable::DockMiddleClickExpandID))
         {
             m_settings.dockMiddleClickExpand = *val;

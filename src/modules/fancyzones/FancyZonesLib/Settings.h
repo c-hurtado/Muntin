@@ -115,6 +115,8 @@ struct Settings
     bool dockAnimation = true; // Windows moved with Shift+Win+arrows spring to their new places
     int dockMotionCurve = 0; // How windows move: 0 spring, 1 ease (one 1-cos curve, no overshoot)
     bool dockAnticipation = false; // A small pull back before the move
+    bool stageAnimatePromote = false; // Promoting a window out of the Stage strip glides (needs Animations)
+    int stagePromoteStyle = 0; // How: 0 grow from the strip tile, 1 crossfade
     bool dockMiddleClickExpand = true; // A middle click on a title bar expands its window into the empty space
     bool desktopScrollOverview = false; // Scrolling the desktop zooms out to the pages, and ends on a page
     int desktopScrollPages = 2; // Pages each monitor scrolls through, the first included, at most MaxDesktopScrollPages. 1: no scrolling.

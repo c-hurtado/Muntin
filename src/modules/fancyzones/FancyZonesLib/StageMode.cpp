@@ -859,6 +859,7 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
     }
 
     const auto plan = ComputePlan(stage);
+    const auto oldStrip = stage.strip; // the tiles as they were shown: where a promoted window's glide may start
     if (!dockedOnly)
     {
         stage.strip = StageStripPlan::Build(
@@ -914,8 +915,55 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         Rect outer;
         bool wasParked{};
         StageMotion::Candidate facts;
+        std::optional<Rect> tile; // wasParked: its strip tile (as an outer rect), when known
     };
     std::vector<DockedMove> dockedMoves;
+
+    // The promote and demote animations (the optional setting, with Animations): the windows that move between a strip tile and a slot
+    const bool promoteAnimated = StageMotion::PromoteGlideAvailable && FancyZonesSettings::settings().stageAnimatePromote && FancyZonesSettings::settings().dockAnimation && !dockedOnly && m_motion.holdSpecs && m_motion.release;
+    const auto promoteStyle = StageMotion::StyleOf(FancyZonesSettings::settings().stagePromoteStyle);
+    auto outerOfTile = [](const Rect& tile, const Managed& m, const RECT& at) {
+        return StageMotion::OuterForTile(tile, { m.insets.L, m.insets.T, m.insets.R, m.insets.B }, at.right - at.left, at.bottom - at.top);
+    };
+    const int scrollOffset = promoteAnimated && m_strip ? m_strip->ScrollOffset(StageStripPlan::KeyOf(stage.monitor.rect)) : 0;
+    // The tile of a window in the strip as it was shown (old plan), where the strip is scrolled to now; not cut at the area; none when out of view
+    auto tileRect = [&](const std::optional<StageStripPlan::Strip>& strip, HWND window) -> std::optional<Rect> {
+        if (strip)
+        {
+            std::vector<Rect> rects;
+            size_t index = SIZE_MAX;
+            for (const auto& t : strip->tiles)
+            {
+                if (t.rect.W() > 0 && t.rect.H() > 0)
+                {
+                    if (t.window == reinterpret_cast<std::uintptr_t>(window))
+                    {
+                        index = rects.size();
+                    }
+
+                    rects.push_back(t.rect);
+                }
+            }
+
+            if (index != SIZE_MAX)
+            {
+                return StageMotion::ScrolledTile(rects, index, strip->clip, scrollOffset);
+            }
+        }
+
+        return std::nullopt;
+    };
+
+    struct DemotedPark
+    {
+        Managed* window{};
+        Rect outer; // where it parks
+        bool toBottom{};
+        StageMotion::Candidate facts;
+        Rect oldRect;
+        std::optional<Rect> tile; // its new tile as an outer rect
+    };
+    std::vector<DemotedPark> demoted; // parked after the hold, so their sprites start from where they are
     for (const auto& item : plan.Items)
     {
         const auto found = m_windows.find(item.Id);
@@ -971,6 +1019,22 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
             RECT now{};
             move.facts.landsDocked = true;
             move.facts.wasParked = m.parked;
+            if (m.parked)
+            {
+                RECT at{};
+                const bool haveAt = GetWindowRect(m.window, &at) != FALSE;
+                const bool behind = !haveAt || !StagePark::LooksParked(ToRect(at), stage.monitor.rect); // Not a sliver: it sits in the master's place
+                if (promoteAnimated && haveAt)
+                {
+                    const auto tile = m.id == m_clickedId && m_clickedTile.W() > 0 && m_clickedTile.H() > 0 ? std::optional<Rect>(m_clickedTile) : tileRect(oldStrip, m.window);
+                    if (tile)
+                    {
+                        move.tile = outerOfTile(*tile, m, at);
+                    }
+                }
+
+                move.facts.parkedBehind = StageMotion::NeedsExtraHolds(promoteStyle, behind, move.tile.has_value());
+            }
             move.facts.moves = !GetWindowRect(m.window, &now) || !ToRect(now).Same(move.outer);
             move.facts.cloaked = IsCloaked(m.window);
             move.facts.fullscreen = m.fullscreen;
@@ -995,14 +1059,36 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
             const auto park = StagePark::Park(haveRect ? ToRect(where) : StageLayouts::LRect(), behind, stage.monitor.rect, monitors);
             if (!(m.parked && haveRect && ToRect(where).Same(park.outer)))
             {
-                MoveTo(m.window, park.outer, !park.sliver, stage.monitor.handle); // Not again for a window that already sits there (HWND_BOTTOM is a z-order change)
+                if (promoteAnimated && !m.parked && haveRect && IsWindowVisible(m.window))
+                {
+                    // It was docked: it may shrink into its tile, so it is parked once the sprites hold it
+                    DemotedPark d;
+                    d.window = &m;
+                    d.outer = park.outer;
+                    d.toBottom = !park.sliver;
+                    d.oldRect = ToRect(where);
+                    d.facts.visible = true;
+                    d.facts.cloaked = IsCloaked(m.window);
+                    d.facts.fullscreen = m.fullscreen;
+                    d.facts.changesMonitor = MonitorFromWindow(m.window, MONITOR_DEFAULTTONEAREST) != stage.monitor.handle;
+                    if (const auto shown = StageMotion::ScrolledTileOf(plan, m.id, scrollOffset))
+                    {
+                        d.tile = outerOfTile(*shown, m, where);
+                    }
+
+                    demoted.push_back(d);
+                }
+                else
+                {
+                    MoveTo(m.window, park.outer, !park.sliver, stage.monitor.handle); // Not again for a window that already sits there (HWND_BOTTOM is a z-order change)
+                }
             }
 
             m.parked = true;
         }
     }
 
-    if (!dockedMoves.empty())
+    if (!dockedMoves.empty() || !demoted.empty())
     {
         std::vector<StageMotion::Candidate> facts;
         for (const auto& move : dockedMoves)
@@ -1014,21 +1100,73 @@ void StageMode::Land(MonitorStage& stage, int skipId, bool dockedOnly)
         context.setting = FancyZonesSettings::settings().dockAnimation;
         context.dragging = m_drag.has_value();
         context.areaChanged = m_areaChanging;
-        std::vector<HWND> gliders;
-        if (m_motion.hold && m_motion.release)
-        {
-            for (const size_t i : StageMotion::Gliders(context, facts))
+        // The demoted windows are parked at the end, a throw or not (before, their park would have happened in the loop above)
+        bool demotedParked = false;
+        const auto parkDemoted = [&] {
+            if (demotedParked)
             {
-                gliders.push_back(dockedMoves[i].window->window);
+                return;
+            }
+
+            demotedParked = true;
+            for (const auto& d : demoted)
+            {
+                try
+                {
+                    MoveTo(d.window->window, d.outer, d.toBottom, stage.monitor.handle);
+                }
+                catch (...)
+                {
+                }
+            }
+        };
+        StageMotion::ScopeGuard parkGuard(parkDemoted);
+        std::vector<DockMotion::Held> held;
+        if (m_motion.release && m_motion.holdSpecs)
+        {
+            const bool fromParked = StageMotion::PromoteGlideAvailable && FancyZonesSettings::settings().stageAnimatePromote;
+            const auto picked = StageMotion::Gliders(context, facts, fromParked);
+            bool promoteGlides = false;
+            for (const size_t i : picked)
+            {
+                const auto& move = dockedMoves[i];
+                StageMotion::Spec spec;
+                if (move.wasParked)
+                {
+                    promoteGlides = true;
+                    spec = StageMotion::PromotedSpec(promoteStyle, move.tile, move.outer);
+                }
+
+                held.push_back({ move.window->window, spec });
+            }
+
+            // A glider out from behind the master: hold the others too, so they are drawn above it and it does not flash over the master
+            for (const size_t i : StageMotion::ExtraHolds(facts, picked))
+            {
+                held.push_back({ dockedMoves[i].window->window, {} });
+            }
+
+            // The window demoted into the strip glides along with a promotion: it shrinks into its tile, or fades out
+            for (const auto& d : demoted)
+            {
+                if (StageMotion::DemoteAnimates(context, d.facts, promoteGlides))
+                {
+                    if (const auto spec = StageMotion::DemotedSpec(promoteStyle, d.tile, d.oldRect))
+                    {
+                        held.push_back({ d.window->window, *spec });
+                    }
+                }
             }
         }
 
         StageMotion::ScopeGuard releaseGuard; // minimized and maximized windows never get here (the loop above skipped them)
-        if (!gliders.empty())
+        if (!held.empty())
         {
-            m_motion.hold(gliders); // Not before: the sprites start from where the windows are now
+            m_motion.holdSpecs(held); // Not before: the sprites start from where the windows are now
             releaseGuard.onExit = [&] { m_motion.release(true); };
         }
+
+        parkDemoted();
 
         for (const auto& move : dockedMoves)
         {
@@ -1162,6 +1300,11 @@ void StageMode::StripClick(HWND window) noexcept
 
         Logger::info(L"Stage: strip click hwnd={:x} class={}", reinterpret_cast<uintptr_t>(m->window), ClassOf(m->window));
         m_graceUntil = GetTickCount64() + ActivateGraceMillis; // the focus change below is ours
+        m_clickedId = m->id;
+        // The tile where the strip shows it now (not cut at the area): the promote glide starts there
+        m_clickedTile = StageMotion::ScrolledTileOf(plan, m->id, m_strip ? m_strip->ScrollOffset(StageStripPlan::KeyOf(stage->monitor.rect)) : 0).value_or(StageLayouts::LRect());
+
+        StageMotion::ScopeGuard clickDone([this] { m_clickedId = 0; });
         Land(*stage);
         if (m->window != GetForegroundWindow())
         {
@@ -2350,7 +2493,7 @@ void StageMode::Leave(bool animate) noexcept
                 facts.fullscreen = m.fullscreen;
                 facts.changesMonitor = MonitorFromRect(&back, MONITOR_DEFAULTTONEAREST) != MonitorFromWindow(m.window, MONITOR_DEFAULTTONEAREST);
                 facts.visible = IsWindowVisible(m.window) != FALSE;
-                if (StageMotion::ShouldGlide(context, facts))
+                if (StageMotion::ShouldGlide(context, facts, false))
                 {
                     gliders.push_back(m.window);
                 }

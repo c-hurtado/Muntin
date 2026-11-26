@@ -16,6 +16,7 @@
 #include <FancyZonesLib/Arrange.h>
 #include <FancyZonesLib/DesktopScroll.h>
 #include <FancyZonesLib/Settings.h>
+#include <FancyZonesLib/StageMotion.h>
 
 namespace
 {
@@ -55,6 +56,11 @@ namespace
         std::array<double, 4> goal{};
         double elapsed{}; // Seconds since
         bool pullBack{};
+        StageMotion::Kind kind{ StageMotion::Kind::Travel }; // FadeIn / FadeOut: stays at `place`, only the opacity moves
+        bool fixedEnd{}; // the sprite goes to `end` (not to where the real window is)
+        std::array<double, 4> end{};
+        int opacity{ 255 }; // 0 to 255
+        int drawnOpacity{ -1 };
     };
 
     bool IsAnimated(HWND window) noexcept
@@ -67,6 +73,11 @@ namespace
     std::array<double, 4> PlaceOf(const RECT& rect) noexcept
     {
         return { static_cast<double>(rect.left), static_cast<double>(rect.top), static_cast<double>(rect.right), static_cast<double>(rect.bottom) };
+    }
+
+    std::array<double, 4> PlaceOf(const StageLayouts::LRect& rect) noexcept
+    {
+        return { static_cast<double>(rect.L), static_cast<double>(rect.T), static_cast<double>(rect.R), static_cast<double>(rect.B) };
     }
 
     // Bottom of the z-order first
@@ -166,7 +177,7 @@ struct DockMotion::Impl
         switch (message)
         {
         case WM_MOTION_HOLD:
-            self->HoldWindows(*reinterpret_cast<const std::vector<HWND>*>(lparam));
+            self->HoldWindows(*reinterpret_cast<const std::vector<Held>*>(lparam));
             return 0;
         case WM_MOTION_RELEASE:
             self->holds = (std::max)(self->holds - 1, 0);
@@ -187,8 +198,14 @@ struct DockMotion::Impl
         }
     }
 
-    void HoldWindows(const std::vector<HWND>& windows) noexcept
+    void HoldWindows(const std::vector<Held>& held) noexcept
     {
+        std::vector<HWND> windows;
+        for (const auto& h : held)
+        {
+            windows.push_back(h.window);
+        }
+
         ++holds;
         const bool moving = overlay != nullptr;
         if (!moving)
@@ -204,12 +221,42 @@ struct DockMotion::Impl
 
         for (const auto candidate : InZOrder(windows))
         {
-            const bool known = std::any_of(sprites.begin(), sprites.end(), [&](const Sprite& sprite) { return sprite.window == candidate; });
+            const auto existing = std::find_if(sprites.begin(), sprites.end(), [&](const Sprite& sprite) { return sprite.window == candidate; });
+            const bool known = existing != sprites.end();
+            if (known)
+            {
+                // A quick second move of a window that still has a sprite: its spec replaces the old one (no stale target, no fade the wrong way)
+                const auto& spec = std::find_if(held.begin(), held.end(), [&](const Held& h) { return h.window == candidate; })->spec;
+                const bool special = spec.kind != StageMotion::Kind::Travel || spec.from || spec.to;
+                if (special || existing->kind != StageMotion::Kind::Travel || existing->fixedEnd)
+                {
+                    existing->kind = spec.kind;
+                    existing->fixedEnd = spec.to.has_value();
+                    existing->end = spec.to ? PlaceOf(*spec.to) : existing->end;
+                    existing->opacity = StageMotion::OpacityByte(spec.kind, 0);
+                    if (spec.from)
+                    {
+                        existing->place = PlaceOf(*spec.from);
+                        existing->speed = {};
+                    }
+
+                    existing->started = false;
+                    existing->elapsed = 0;
+                    existing->pullBack = false;
+                }
+            }
+
             RECT rect{};
             HTHUMBNAIL id{};
             if (!known && IsAnimated(candidate) && GetWindowRect(candidate, &rect) && SUCCEEDED(DwmRegisterThumbnail(overlay, candidate, &id)))
             {
-                sprites.push_back({ .window = candidate, .id = id, .place = PlaceOf(rect) });
+                const auto spec = std::find_if(held.begin(), held.end(), [&](const Held& h) { return h.window == candidate; })->spec;
+                Sprite sprite{ .window = candidate, .id = id, .place = spec.from ? PlaceOf(*spec.from) : PlaceOf(rect) };
+                sprite.kind = spec.kind;
+                sprite.fixedEnd = spec.to.has_value();
+                sprite.end = spec.to ? PlaceOf(*spec.to) : sprite.end;
+                sprite.opacity = StageMotion::OpacityByte(spec.kind, 0); // a fade in starts invisible: not a frame of it before the first step
+                sprites.push_back(sprite);
             }
         }
 
@@ -228,10 +275,11 @@ struct DockMotion::Impl
         for (auto& sprite : sprites)
         {
             const RECT place{ std::lround(sprite.place[0]) - origin.x, std::lround(sprite.place[1]) - origin.y, std::lround(sprite.place[2]) - origin.x, std::lround(sprite.place[3]) - origin.y };
-            if (!EqualRect(&place, &sprite.drawn))
+            if (!EqualRect(&place, &sprite.drawn) || sprite.opacity != sprite.drawnOpacity)
             {
                 sprite.drawn = place;
-                DWM_THUMBNAIL_PROPERTIES properties{ .dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE, .opacity = 255, .fVisible = TRUE };
+                sprite.drawnOpacity = sprite.opacity;
+                DWM_THUMBNAIL_PROPERTIES properties{ .dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE, .opacity = static_cast<BYTE>(sprite.opacity), .fVisible = TRUE };
                 properties.rcDestination = place;
                 DwmUpdateThumbnailProperties(sprite.id, &properties);
             }
@@ -247,7 +295,17 @@ struct DockMotion::Impl
             return false;
         }
 
-        const auto target = PlaceOf(rect);
+        if (sprite.kind != StageMotion::Kind::Travel)
+        {
+            // A fade: the sprite sits still, its opacity runs over the ease time
+            sprite.started = true;
+            sprite.elapsed += seconds;
+            const double progress = (std::min)(sprite.elapsed / EaseSeconds, 1.0);
+            sprite.opacity = StageMotion::OpacityByte(sprite.kind, progress);
+            return progress < 1.0;
+        }
+
+        const auto target = sprite.fixedEnd ? sprite.end : PlaceOf(rect);
         const bool ease = FancyZonesSettings::settings().dockMotionCurve == 1;
         if (!sprite.started)
         {
@@ -405,13 +463,24 @@ DockMotion::~DockMotion()
     m_impl->thread.join();
 }
 
-void DockMotion::Hold(const std::vector<HWND>& windows) noexcept
+void DockMotion::Hold(const std::vector<Held>& windows) noexcept
 {
     if (m_impl->window)
     {
         // Not posted: the windows must not move before this returns
         SendMessageW(m_impl->window, WM_MOTION_HOLD, 0, reinterpret_cast<LPARAM>(&windows));
     }
+}
+
+void DockMotion::Hold(const std::vector<HWND>& windows) noexcept
+{
+    std::vector<Held> held;
+    for (const auto window : windows)
+    {
+        held.push_back({ window, {} });
+    }
+
+    Hold(held);
 }
 
 void DockMotion::Release(bool moved) noexcept
